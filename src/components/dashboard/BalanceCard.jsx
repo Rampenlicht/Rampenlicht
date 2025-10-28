@@ -23,11 +23,21 @@ const BalanceCard = ({ userId, role }) => {
   };
 
   useEffect(() => {
+    if (!userId) return;
+
     loadBalance();
+
+    let realtimeConnected = false;
+    let pollInterval = null;
 
     // Realtime Subscription für automatische Updates
     const channel = supabase
-      .channel(`balance-changes-${userId}`)
+      .channel(`balance-changes-${userId}`, {
+        config: {
+          broadcast: { self: true },
+          presence: { key: userId }
+        }
+      })
       .on(
         'postgres_changes',
         {
@@ -37,26 +47,73 @@ const BalanceCard = ({ userId, role }) => {
           filter: `id=eq.${userId}`,
         },
         (payload) => {
-          console.log('Realtime Update erhalten:', payload);
+          console.log('✅ Realtime Update erhalten:', payload);
+          realtimeConnected = true;
           if (payload.new && payload.new.balance !== undefined) {
             setBalance(payload.new.balance);
           }
         }
       )
       .subscribe((status) => {
-        console.log('Realtime Status:', status);
+        console.log('🔌 Realtime Status:', status);
+        
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime verbunden!');
+          realtimeConnected = true;
+          // Wenn Realtime funktioniert, Polling-Intervall verlängern
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+          pollInterval = setInterval(() => {
+            console.log('🔄 Fallback Polling (Realtime aktiv)...');
+            loadBalance();
+          }, 60000); // Alle 60 Sekunden als Backup
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.log('❌ Realtime Fehler, nutze Polling:', status);
+          realtimeConnected = false;
+          // Bei Fehler: Aggressives Polling
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+          pollInterval = setInterval(() => {
+            console.log('🔄 Polling Balance (Realtime inaktiv)...');
+            loadBalance();
+          }, 5000); // Alle 5 Sekunden
+        }
       });
 
-    // Fallback: Polling alle 30 Sekunden (falls Realtime nicht funktioniert)
-    const pollInterval = setInterval(() => {
-      console.log('Polling Balance...');
+    // Initial: Polling alle 10 Sekunden starten
+    pollInterval = setInterval(() => {
+      if (!realtimeConnected) {
+        console.log('🔄 Initial Polling...');
+        loadBalance();
+      }
+    }, 10000);
+
+    // Visibility Change Handler - Update beim Tab-Wechsel
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👀 App wieder sichtbar, aktualisiere Balance...');
+        loadBalance();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Page Focus Handler - Update bei App-Fokus (wichtig für iOS)
+    const handleFocus = () => {
+      console.log('🎯 App fokussiert, aktualisiere Balance...');
       loadBalance();
-    }, 30000);
+    };
+    window.addEventListener('focus', handleFocus);
 
     return () => {
-      console.log('Cleanup: Removing channel and interval');
+      console.log('🧹 Cleanup: Removing channel and intervals');
       supabase.removeChannel(channel);
-      clearInterval(pollInterval);
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [userId]);
 
