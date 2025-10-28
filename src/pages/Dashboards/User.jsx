@@ -3,7 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { profileService } from '../../services/profileService';
 import BottomNav from '../../components/BottomNav';
 import HeaderFix from '../../components/HeaderFix';
-import HomeTab from '../tabs/HomeTab';
+import HomeTab from '../Tabs/HomeTab';
 
 function UserDashboard() {
   const [activeTab, setActiveTab] = useState('home');
