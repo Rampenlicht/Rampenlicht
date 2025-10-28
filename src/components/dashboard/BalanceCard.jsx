@@ -32,16 +32,11 @@ const BalanceCard = ({ userId, role }) => {
 
     // Realtime Subscription für automatische Updates
     const channel = supabase
-      .channel(`balance-changes-${userId}`, {
-        config: {
-          broadcast: { self: true },
-          presence: { key: userId }
-        }
-      })
+      .channel(`balance-${userId}`)
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'UPDATE',
           schema: 'public',
           table: 'profiles',
           filter: `id=eq.${userId}`,
@@ -54,8 +49,12 @@ const BalanceCard = ({ userId, role }) => {
           }
         }
       )
-      .subscribe((status) => {
+      .subscribe((status, err) => {
         console.log('🔌 Realtime Status:', status);
+        
+        if (err) {
+          console.error('❌ Realtime Subscription Error:', err);
+        }
         
         if (status === 'SUBSCRIBED') {
           console.log('✅ Realtime verbunden!');
@@ -69,7 +68,8 @@ const BalanceCard = ({ userId, role }) => {
             loadBalance();
           }, 60000); // Alle 60 Sekunden als Backup
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.log('❌ Realtime Fehler, nutze Polling:', status);
+          console.error('❌ Realtime Fehler, nutze Polling:', status);
+          console.error('💡 Tipp: Führen Sie supabase/enable_realtime.sql aus!');
           realtimeConnected = false;
           // Bei Fehler: Aggressives Polling
           if (pollInterval) {

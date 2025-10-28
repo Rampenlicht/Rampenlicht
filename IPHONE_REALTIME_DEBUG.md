@@ -107,6 +107,35 @@
 }, 10000); // 10 Sekunden
 ```
 
+## 🚨 CHANNEL_ERROR beheben:
+
+Wenn Sie `CHANNEL_ERROR` in der Console sehen, ist Realtime nicht aktiviert!
+
+### Lösung (WICHTIG!):
+
+1. **Öffnen Sie Ihr Supabase Dashboard**
+2. **Gehen Sie zu:** SQL Editor
+3. **Führen Sie das SQL-Script aus:** `supabase/enable_realtime.sql`
+
+Oder kopieren Sie diesen Code direkt:
+
+```sql
+-- profiles Tabelle zur Realtime Publication hinzufügen
+ALTER PUBLICATION supabase_realtime ADD TABLE profiles;
+
+-- Prüfen ob es funktioniert hat
+SELECT schemaname, tablename 
+FROM pg_publication_tables 
+WHERE pubname = 'supabase_realtime';
+```
+
+### Alternative: Über das Dashboard
+
+1. **Supabase Dashboard** → **Database** → **Replication**
+2. Suchen Sie die `profiles` Tabelle
+3. Aktivieren Sie **"Enable Realtime"**
+4. Speichern Sie die Änderungen
+
 ## Supabase Realtime überprüfen:
 
 ### SQL Command (im Supabase SQL Editor):
