@@ -57,38 +57,37 @@ const BalanceCard = ({ userId, role }) => {
         }
         
         if (status === 'SUBSCRIBED') {
-          console.log('✅ Realtime verbunden!');
+          console.log('✅ Realtime verbunden! Kein häufiges Polling benötigt.');
           realtimeConnected = true;
-          // Wenn Realtime funktioniert, Polling-Intervall verlängern
+          
+          // Polling stoppen, wenn es läuft
           if (pollInterval) {
             clearInterval(pollInterval);
+            pollInterval = null;
           }
+          
+          // NUR als Sicherheits-Backup: Alle 5 Minuten einmal prüfen
           pollInterval = setInterval(() => {
-            console.log('🔄 Fallback Polling (Realtime aktiv)...');
+            console.log('🔄 Backup Check (Realtime aktiv)...');
             loadBalance();
-          }, 60000); // Alle 60 Sekunden als Backup
+          }, 300000); // Alle 5 Minuten
+          
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.error('❌ Realtime Fehler, nutze Polling:', status);
+          console.error('❌ Realtime Fehler, aktiviere Polling!');
           console.error('💡 Tipp: Führen Sie supabase/enable_realtime.sql aus!');
           realtimeConnected = false;
+          
           // Bei Fehler: Aggressives Polling
           if (pollInterval) {
             clearInterval(pollInterval);
           }
+          
           pollInterval = setInterval(() => {
             console.log('🔄 Polling Balance (Realtime inaktiv)...');
             loadBalance();
           }, 5000); // Alle 5 Sekunden
         }
       });
-
-    // Initial: Polling alle 10 Sekunden starten
-    pollInterval = setInterval(() => {
-      if (!realtimeConnected) {
-        console.log('🔄 Initial Polling...');
-        loadBalance();
-      }
-    }, 10000);
 
     // Visibility Change Handler - Update beim Tab-Wechsel
     const handleVisibilityChange = () => {
