@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Digitale Guthaben-Verwaltung - Client-Side SPA mit Supabase Backend",
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=22.16.0",
     "npm": ">=10.9.0"
   },
   "scripts": {
