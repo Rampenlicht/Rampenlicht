@@ -31,106 +31,142 @@ const RecentTransactions = ({ userId }) => {
 
     let realtimeConnected = false;
     let pollInterval = null;
+    let channelRef = null;
 
     // Realtime Subscription für Transaktions-Updates
-    const channel = supabase
-      .channel(`transactions-${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'transactions',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log('✅ Neue Transaktion erhalten:', payload);
-          realtimeConnected = true;
-          setTransactions((prev) => [payload.new, ...prev].slice(0, 5));
-          setNewTransactionIds((prev) => new Set(prev).add(payload.new.id));
-          
-          // Animation nach 3 Sekunden entfernen
-          setTimeout(() => {
-            setNewTransactionIds((prev) => {
-              const next = new Set(prev);
-              next.delete(payload.new.id);
-              return next;
-            });
-          }, 3000);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'transactions',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log('🔄 Transaktion aktualisiert:', payload);
-          setTransactions((prev) =>
-            prev.map((t) => (t.id === payload.new.id ? payload.new : t))
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'transactions',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log('🗑️ Transaktion gelöscht:', payload);
-          setTransactions((prev) => prev.filter((t) => t.id !== payload.old.id));
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('🔌 Realtime Status (Transactions):', status);
+    const setupRealtimeChannel = () => {
+      // Alten Channel entfernen, falls vorhanden
+      if (channelRef) {
+        console.log('🧹 Entferne alten Transactions-Channel...');
+        supabase.removeChannel(channelRef);
+        channelRef = null;
+      }
 
-        if (err) {
-          console.error('❌ Realtime Subscription Error (Transactions):', err);
-        }
+      console.log('🔌 Erstelle neuen Transactions-Channel...');
+      const channel = supabase
+        .channel(`transactions-${userId}-${Date.now()}`, {
+          config: {
+            broadcast: { self: true },
+            presence: { key: userId }
+          }
+        })
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'transactions',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            console.log('✅ Neue Transaktion erhalten:', payload);
+            realtimeConnected = true;
+            setTransactions((prev) => [payload.new, ...prev].slice(0, 5));
+            setNewTransactionIds((prev) => new Set(prev).add(payload.new.id));
+            
+            // Animation nach 3 Sekunden entfernen
+            setTimeout(() => {
+              setNewTransactionIds((prev) => {
+                const next = new Set(prev);
+                next.delete(payload.new.id);
+                return next;
+              });
+            }, 3000);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'transactions',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            console.log('🔄 Transaktion aktualisiert:', payload);
+            setTransactions((prev) =>
+              prev.map((t) => (t.id === payload.new.id ? payload.new : t))
+            );
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'DELETE',
+            schema: 'public',
+            table: 'transactions',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            console.log('🗑️ Transaktion gelöscht:', payload);
+            setTransactions((prev) => prev.filter((t) => t.id !== payload.old.id));
+          }
+        )
+        .subscribe((status, err) => {
+          console.log('🔌 Realtime Status (Transactions):', status);
 
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Realtime verbunden! Transaktionen werden live aktualisiert.');
-          realtimeConnected = true;
-
-          // Polling stoppen, wenn es läuft
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
+          if (err) {
+            console.error('❌ Realtime Subscription Error (Transactions):', err);
           }
 
-          // Backup-Check alle 5 Minuten
-          pollInterval = setInterval(() => {
-            console.log('🔄 Backup Check (Realtime aktiv)...');
-            loadTransactions();
-          }, 300000);
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ Realtime verbunden! Transaktionen werden live aktualisiert.');
+            realtimeConnected = true;
 
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.error('❌ Realtime Fehler für Transaktionen, aktiviere Polling!');
-          realtimeConnected = false;
+            // Polling stoppen, wenn es läuft
+            if (pollInterval) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+            }
 
-          // Bei Fehler: Polling alle 10 Sekunden
-          if (pollInterval) {
-            clearInterval(pollInterval);
+            // Backup-Check alle 5 Minuten
+            pollInterval = setInterval(() => {
+              console.log('🔄 Backup Check (Realtime aktiv)...');
+              loadTransactions();
+            }, 300000);
+
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error('❌ Realtime Fehler für Transaktionen, versuche Reconnect...');
+            realtimeConnected = false;
+
+            // Channel neu erstellen nach Fehler
+            setTimeout(() => {
+              console.log('🔄 Versuche Channel-Reconnect...');
+              setupRealtimeChannel();
+            }, 2000);
+
+          } else if (status === 'CLOSED') {
+            console.warn('⚠️ Transactions Channel geschlossen');
+            realtimeConnected = false;
+
+            // Bei Fehler: Polling alle 10 Sekunden
+            if (!pollInterval) {
+              pollInterval = setInterval(() => {
+                console.log('🔄 Polling Transaktionen (Realtime inaktiv)...');
+                loadTransactions();
+              }, 10000);
+            }
           }
+        });
 
-          pollInterval = setInterval(() => {
-            console.log('🔄 Polling Transaktionen (Realtime inaktiv)...');
-            loadTransactions();
-          }, 10000);
-        }
-      });
+      channelRef = channel;
+      return channel;
+    };
+
+    // Initialer Channel-Setup
+    setupRealtimeChannel();
 
     // Visibility Change Handler - Update beim Tab-Wechsel
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        console.log('👀 App wieder sichtbar, aktualisiere Transaktionen...');
+        console.log('👀 App wieder sichtbar, aktualisiere Transaktionen und reconnect...');
         loadTransactions();
+        
+        // Reconnect Realtime wenn nötig
+        if (channelRef && channelRef.state === 'closed') {
+          console.log('🔄 Reconnecting Realtime...');
+          setupRealtimeChannel();
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -139,14 +175,24 @@ const RecentTransactions = ({ userId }) => {
     const handleFocus = () => {
       console.log('🎯 App fokussiert, aktualisiere Transaktionen...');
       loadTransactions();
+      
+      // Reconnect Realtime wenn nötig
+      if (channelRef && channelRef.state === 'closed') {
+        console.log('🔄 Reconnecting Realtime...');
+        setupRealtimeChannel();
+      }
     };
     window.addEventListener('focus', handleFocus);
 
     return () => {
       console.log('🧹 Cleanup: Removing transactions channel and intervals');
-      supabase.removeChannel(channel);
+      if (channelRef) {
+        supabase.removeChannel(channelRef);
+        channelRef = null;
+      }
       if (pollInterval) {
         clearInterval(pollInterval);
+        pollInterval = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);

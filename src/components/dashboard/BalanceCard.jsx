@@ -331,71 +331,106 @@ const BalanceCard = ({ userId, role }) => {
 
     let realtimeConnected = false;
     let pollInterval = null;
+    let channelRef = null;
 
     // Realtime Subscription für automatische Updates
-    const channel = supabase
-      .channel(`balance-${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'profiles',
-          filter: `id=eq.${userId}`,
-        },
-        (payload) => {
-          console.log('✅ Realtime Update erhalten:', payload);
-          realtimeConnected = true;
-          if (payload.new && payload.new.balance !== undefined) {
-            setBalance(payload.new.balance);
+    const setupRealtimeChannel = () => {
+      // Alten Channel entfernen, falls vorhanden
+      if (channelRef) {
+        console.log('🧹 Entferne alten Balance-Channel...');
+        supabase.removeChannel(channelRef);
+        channelRef = null;
+      }
+
+      console.log('🔌 Erstelle neuen Balance-Channel...');
+      const channel = supabase
+        .channel(`balance-${userId}-${Date.now()}`, {
+          config: {
+            broadcast: { self: true },
+            presence: { key: userId }
           }
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('🔌 Realtime Status:', status);
-        
-        if (err) {
-          console.error('❌ Realtime Subscription Error:', err);
-        }
-        
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Realtime verbunden! Kein häufiges Polling benötigt.');
-          realtimeConnected = true;
-          
-          // Polling stoppen, wenn es läuft
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
+        })
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'profiles',
+            filter: `id=eq.${userId}`,
+          },
+          (payload) => {
+            console.log('✅ Realtime Update erhalten:', payload);
+            realtimeConnected = true;
+            if (payload.new && payload.new.balance !== undefined) {
+              setBalance(payload.new.balance);
+            }
           }
+        )
+        .subscribe((status, err) => {
+          console.log('🔌 Realtime Status (Balance):', status);
           
-          // NUR als Sicherheits-Backup: Alle 5 Minuten einmal prüfen
-          pollInterval = setInterval(() => {
-            console.log('🔄 Backup Check (Realtime aktiv)...');
-            loadBalance();
-          }, 300000); // Alle 5 Minuten
-          
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.error('❌ Realtime Fehler, aktiviere Polling!');
-          console.error('💡 Tipp: Führen Sie supabase/enable_realtime.sql aus!');
-          realtimeConnected = false;
-          
-          // Bei Fehler: Aggressives Polling
-          if (pollInterval) {
-            clearInterval(pollInterval);
+          if (err) {
+            console.error('❌ Realtime Subscription Error:', err);
           }
           
-          pollInterval = setInterval(() => {
-            console.log('🔄 Polling Balance (Realtime inaktiv)...');
-            loadBalance();
-          }, 5000); // Alle 5 Sekunden
-        }
-      });
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ Realtime verbunden! Kein häufiges Polling benötigt.');
+            realtimeConnected = true;
+            
+            // Polling stoppen, wenn es läuft
+            if (pollInterval) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+            }
+            
+            // NUR als Sicherheits-Backup: Alle 5 Minuten einmal prüfen
+            pollInterval = setInterval(() => {
+              console.log('🔄 Backup Check (Realtime aktiv)...');
+              loadBalance();
+            }, 300000); // Alle 5 Minuten
+            
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error('❌ Realtime Fehler, versuche Reconnect...');
+            realtimeConnected = false;
+            
+            // Channel neu erstellen nach Fehler
+            setTimeout(() => {
+              console.log('🔄 Versuche Channel-Reconnect...');
+              setupRealtimeChannel();
+            }, 2000);
+            
+          } else if (status === 'CLOSED') {
+            console.warn('⚠️ Channel geschlossen');
+            realtimeConnected = false;
+            
+            // Bei Fehler: Polling aktivieren
+            if (!pollInterval) {
+              pollInterval = setInterval(() => {
+                console.log('🔄 Polling Balance (Realtime inaktiv)...');
+                loadBalance();
+              }, 5000); // Alle 5 Sekunden
+            }
+          }
+        });
+
+      channelRef = channel;
+      return channel;
+    };
+
+    // Initialer Channel-Setup
+    setupRealtimeChannel();
 
     // Visibility Change Handler - Update beim Tab-Wechsel
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        console.log('👀 App wieder sichtbar, aktualisiere Balance...');
+        console.log('👀 App wieder sichtbar, aktualisiere Balance und reconnect...');
         loadBalance();
+        
+        // Reconnect Realtime wenn nötig
+        if (channelRef && channelRef.state === 'closed') {
+          console.log('🔄 Reconnecting Realtime...');
+          setupRealtimeChannel();
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -404,14 +439,24 @@ const BalanceCard = ({ userId, role }) => {
     const handleFocus = () => {
       console.log('🎯 App fokussiert, aktualisiere Balance...');
       loadBalance();
+      
+      // Reconnect Realtime wenn nötig
+      if (channelRef && channelRef.state === 'closed') {
+        console.log('🔄 Reconnecting Realtime...');
+        setupRealtimeChannel();
+      }
     };
     window.addEventListener('focus', handleFocus);
 
     return () => {
-      console.log('🧹 Cleanup: Removing channel and intervals');
-      supabase.removeChannel(channel);
+      console.log('🧹 Cleanup: Removing Balance channel and intervals');
+      if (channelRef) {
+        supabase.removeChannel(channelRef);
+        channelRef = null;
+      }
       if (pollInterval) {
         clearInterval(pollInterval);
+        pollInterval = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
