@@ -1,11 +1,25 @@
 # Netlify Configuration für SPA (Single Page Application)
 # Diese Datei sorgt dafür, dass alle Routes zu index.html weitergeleitet werden
 
+# ⚠️ WICHTIG: Netlify unterstützt KEINE WebSockets!
+# - Supabase Realtime (WebSockets) funktioniert NICHT auf Netlify
+# - Die App verwendet automatisch Polling als Fallback
+# - Für Realtime: Verwenden Sie Coolify, Railway, Vercel oder andere Plattformen mit WebSocket-Support
+
 [build]
   # Build-Command für Vite
   command = "npm run build"
   # Output-Verzeichnis nach dem Build
   publish = "dist"
+
+# Environment Variables für Production
+[context.production.environment]
+  NODE_VERSION = "22"
+  # Realtime ist auf Netlify deaktiviert (keine WebSocket-Unterstützung)
+  VITE_ENABLE_REALTIME = "false"
+
+[context.deploy-preview.environment]
+  NODE_VERSION = "22"
 
 # Wichtig: Alle Routes zu index.html weiterleiten
 # Dies ist notwendig für Client-Side Routing (React Router)

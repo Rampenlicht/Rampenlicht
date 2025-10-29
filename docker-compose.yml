@@ -1,0 +1,94 @@
+# Docker Compose für Rampenlicht App
+# Diese Konfiguration bietet:
+# - Vite Dev Server mit HMR und WebSocket-Support
+# - Produktions-Build mit Nginx und WebSocket-Proxying
+# - Einfaches lokales Testing
+
+version: '3.8'
+
+services:
+  # ========================================
+  # Development Service (mit Hot Reload)
+  # ========================================
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rampenlicht-dev
+    ports:
+      - "5173:5173"  # Vite Dev Server
+    volumes:
+      # Source-Code mounten für Hot Reload
+      - .:/app
+      - /app/node_modules  # node_modules nicht überschreiben
+    environment:
+      - NODE_ENV=development
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+      - VITE_ENABLE_REALTIME=true
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - rampenlicht-network
+    restart: unless-stopped
+    profiles:
+      - dev
+
+  # ========================================
+  # Production Service (mit Nginx)
+  # ========================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+        - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+    container_name: rampenlicht-app
+    ports:
+      - "3000:80"  # App auf Port 3000
+    environment:
+      - NODE_ENV=production
+    networks:
+      - rampenlicht-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles:
+      - prod
+
+  # ========================================
+  # Nginx Reverse Proxy (Optional)
+  # Für erweiterte Konfiguration mit SSL
+  # ========================================
+  nginx:
+    image: nginx:alpine
+    container_name: rampenlicht-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro  # SSL-Zertifikate (optional)
+    depends_on:
+      - app
+    networks:
+      - rampenlicht-network
+    restart: unless-stopped
+    profiles:
+      - nginx
+
+networks:
+  rampenlicht-network:
+    driver: bridge
+
+# ========================================
+# Volumes für persistente Daten (optional)
+# ========================================
+volumes:
+  node_modules:
+
+
