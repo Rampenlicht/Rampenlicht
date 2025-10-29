@@ -421,9 +421,9 @@ const BalanceCard = ({ userId, role }) => {
   return (
     <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-4 border border-white/20 dark:border-gray-700/20 shadow-lg transition-colors duration-300">
       <div className="flex items-center justify-between mb-4">
-        <div>
+        <div className="flex-1 min-w-0 pr-4">
           <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Aktuelles Guthaben</p>
-          <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+          <p className="text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums">
             {loading ? (
               <span className="animate-pulse">--,--</span>
             ) : (
