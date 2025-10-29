@@ -1,19 +1,8 @@
-# Nixpacks configuration for Coolify/Railway
-# Dieses File wird von Coolify/Railway automatisch erkannt
-
 [phases.setup]
-# Node.js Version festlegen (muss mit package.json übereinstimmen)
 nixPkgs = ["nodejs_22"]
 
 [phases.install]
-# npm ci ist schneller und zuverlässiger für CI/CD
 cmds = ["npm ci"]
 
 [phases.build]
-# Vite Build ausführen
 cmds = ["npm run build"]
-
-[start]
-# SPA mit serve hosten (wichtig für React Router)
-cmd = "npx serve -s dist -p ${PORT:-3000}"
-
