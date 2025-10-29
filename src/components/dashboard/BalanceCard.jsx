@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '../../lib/supabase';
 import { profileService } from '../../services/profileService';
 
@@ -14,13 +14,14 @@ const BalanceCard = ({ userId, role }) => {
   const [sendAmount, setSendAmount] = useState('');
   const [sendingMoney, setSendingMoney] = useState(false);
   const [scanningQR, setScanningQR] = useState(false);
+  const [showQRScanner, setShowQRScanner] = useState(false);
   const [sendError, setSendError] = useState('');
   const [sendSuccess, setSendSuccess] = useState('');
   const [profile, setProfile] = useState(null);
   
-  // QR Scanner Ref
+  // QR Scanner Refs
   const qrScannerRef = useRef(null);
-  const scannerInstanceRef = useRef(null);
+  const html5QrCodeRef = useRef(null);
 
   const loadBalance = async () => {
     if (!userId) return;
@@ -39,97 +40,142 @@ const BalanceCard = ({ userId, role }) => {
     setLoading(false);
   };
 
-  // QR-Code Scanner starten
-  const handleQRScan = async () => {
+  // QR-Code Scanner starten (Button-Klick)
+  const handleQRScan = () => {
     console.log('🔵 Scanner-Button geklickt');
     setSendError('');
-    
-    // Prüfe ob MediaDevices API verfügbar ist
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setSendError('Kamera wird von Ihrem Browser nicht unterstützt. Bitte geben Sie die ID manuell ein.');
-      return;
-    }
-
-    // Zeige Scanner-Container sofort an
+    setShowQRScanner(true);
     setScanningQR(true);
+  };
 
-    // Warte kurz, damit das DOM-Element geladen ist
-    setTimeout(async () => {
-      try {
-        console.log('🔵 Initialisiere Scanner für iOS/iPhone...');
+  // QR-Scanner tatsächlich starten (nach DOM-Rendering)
+  const startQRScanner = async () => {
+    if (!qrScannerRef.current) return;
+
+    try {
+      console.log('🔵 Initialisiere Scanner...');
+      const html5QrCode = new Html5Qrcode("qr-reader");
+      html5QrCodeRef.current = html5QrCode;
+
+      const cameras = await Html5Qrcode.getCameras();
+      console.log('📷 Verfügbare Kameras:', cameras.length);
+      
+      if (cameras && cameras.length) {
+        // Versuche die Rückkamera zu finden
+        let selectedCamera = cameras[0]; // Fallback zur ersten Kamera
         
-        // Für iOS: Spezielle Konfiguration
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-        console.log('📱 iOS erkannt:', isIOS);
-        
-        // Scanner initialisieren mit iOS-optimierten Einstellungen
-        const scanner = new Html5QrcodeScanner('qr-reader', {
-          fps: 10,
-          qrbox: isIOS ? 200 : 250,  // Kleinere Box für iOS
-          aspectRatio: 1.0,
-          rememberLastUsedCamera: true,
-          showTorchButtonIfSupported: true,
-          // Wichtig für iOS: Explizit die Kamera-Auswahl erlauben
-          videoConstraints: {
-            facingMode: { ideal: 'environment' }  // Rückkamera bevorzugen
+        // Suche nach der Rückkamera (normalerweise die zweite Kamera oder eine mit "back" im Namen)
+        for (const camera of cameras) {
+          const label = camera.label.toLowerCase();
+          if (label.includes('back') || label.includes('hinten') || label.includes('rear')) {
+            selectedCamera = camera;
+            console.log('✅ Rückkamera gefunden:', camera.label);
+            break;
           }
-        });
-
-        scannerInstanceRef.current = scanner;
-
-        scanner.render(
+        }
+        
+        // Wenn es mehr als eine Kamera gibt und keine Rückkamera gefunden wurde,
+        // verwende die zweite Kamera (oft die Rückkamera)
+        if (cameras.length > 1 && selectedCamera === cameras[0]) {
+          selectedCamera = cameras[1];
+          console.log('📷 Zweite Kamera verwendet:', selectedCamera.label);
+        }
+        
+        console.log('🎬 Starte Kamera:', selectedCamera.label);
+        
+        await html5QrCode.start(
+          { deviceId: { exact: selectedCamera.id } },
+          {
+            fps: 10,
+            qrbox: { width: 192, height: 192 },
+            aspectRatio: 1.0
+          },
           (decodedText) => {
             // QR-Code erfolgreich gescannt
             console.log('✅ QR-Code gescannt:', decodedText);
             setSendToIdentifier(decodedText.toUpperCase());
-            stopScanner();
+            stopQRScanner();
+            setShowQRScanner(false);
+            setScanningQR(false);
+            setSendSuccess(`QR-Code erfolgreich gescannt: ${decodedText}`);
           },
           (errorMessage) => {
-            // Diese Fehler sind normal während des Scan-Prozesses
-            // und müssen nicht geloggt werden
+            // Fehler beim Scannen - ignorieren (normal während des Scannens)
           }
         );
         
-        console.log('✅ Scanner gestartet - Warte auf Kamera-Berechtigung...');
-      } catch (error) {
-        console.error('❌ Scanner-Fehler:', error);
-        
-        let errorMsg = 'Scanner konnte nicht gestartet werden. ';
-        
-        if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
-          errorMsg = 'Kamera-Zugriff wurde verweigert. Bitte erlauben Sie den Zugriff in den Safari-Einstellungen: Einstellungen > Safari > Kamera > "Fragen" oder "Zulassen".';
-        } else if (error.name === 'NotFoundError') {
-          errorMsg = 'Keine Kamera gefunden. Bitte geben Sie die ID manuell ein.';
-        } else if (error.name === 'NotReadableError') {
-          errorMsg = 'Kamera wird bereits verwendet. Bitte schließen Sie andere Apps.';
-        } else if (error.name === 'SecurityError') {
-          errorMsg = 'Kamera-Zugriff blockiert. Die App muss über HTTPS geladen werden.';
-        } else {
-          errorMsg += error.message || 'Bitte versuchen Sie es erneut oder geben Sie die ID manuell ein.';
-        }
-        
-        setSendError(errorMsg);
-        setScanningQR(false);
+        console.log('✅ Scanner läuft!');
+      } else {
+        throw new Error('Keine Kamera gefunden');
       }
-    }, 400);  // Längere Wartezeit für iOS
+    } catch (error) {
+      console.error('❌ Fehler beim Starten des QR-Scanners:', error);
+      
+      let errorMsg = 'Kamera konnte nicht gestartet werden. ';
+      
+      if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+        errorMsg = 'Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff in den Safari-Einstellungen: Einstellungen > Safari > Kamera > "Fragen".';
+      } else if (error.name === 'NotFoundError') {
+        errorMsg = 'Keine Kamera gefunden. Bitte geben Sie die ID manuell ein.';
+      } else if (error.name === 'NotReadableError') {
+        errorMsg = 'Kamera wird bereits verwendet. Bitte schließen Sie andere Apps.';
+      } else {
+        errorMsg += 'Bitte gib die ID manuell ein.';
+      }
+      
+      setSendError(errorMsg);
+      setShowQRScanner(false);
+      setScanningQR(false);
+    }
   };
 
   // QR-Scanner stoppen
-  const stopScanner = () => {
-    if (scannerInstanceRef.current) {
-      scannerInstanceRef.current.clear().catch((err) => {
-        console.error('Fehler beim Stoppen des Scanners:', err);
-      });
-      scannerInstanceRef.current = null;
+  const stopQRScanner = async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        console.log('🛑 Stoppe Scanner...');
+        await html5QrCodeRef.current.stop();
+        html5QrCodeRef.current = null;
+        console.log('✅ Scanner gestoppt');
+      } catch (error) {
+        console.error('Fehler beim Stoppen des QR-Scanners:', error);
+        html5QrCodeRef.current = null;
+      }
     }
-    setScanningQR(false);
+    
+    // DOM-Cleanup: Entferne alle Kamera-Elemente
+    const qrReaderElement = document.getElementById('qr-reader');
+    if (qrReaderElement) {
+      qrReaderElement.innerHTML = '';
+    }
   };
 
-  // Cleanup beim Unmount
+  // Scanner-Lifecycle Management
+  useEffect(() => {
+    if (showQRScanner && scanningQR) {
+      // Kurze Verzögerung für UI-Rendering
+      setTimeout(startQRScanner, 100);
+    }
+    
+    return () => {
+      if (html5QrCodeRef.current) {
+        stopQRScanner();
+      }
+    };
+  }, [showQRScanner, scanningQR]);
+
+  // Zusätzlicher Cleanup-Effekt für Modal-Schließung
+  useEffect(() => {
+    if (!showQRScanner && html5QrCodeRef.current) {
+      stopQRScanner();
+    }
+  }, [showQRScanner]);
+
+  // Cleanup beim Unmount der gesamten Komponente
   useEffect(() => {
     return () => {
-      if (scannerInstanceRef.current) {
-        scannerInstanceRef.current.clear().catch(console.error);
+      if (html5QrCodeRef.current) {
+        stopQRScanner();
       }
     };
   }, []);
@@ -421,7 +467,9 @@ const BalanceCard = ({ userId, role }) => {
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Geld senden</h3>
                 <button
                   onClick={() => {
-                    stopScanner();
+                    stopQRScanner();
+                    setShowQRScanner(false);
+                    setScanningQR(false);
                     setShowSendMoneyModal(false);
                     setSendError('');
                     setSendSuccess('');
@@ -464,7 +512,11 @@ const BalanceCard = ({ userId, role }) => {
                     className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
                   />
                   <button
-                    onClick={scanningQR ? stopScanner : handleQRScan}
+                    onClick={scanningQR ? () => {
+                      stopQRScanner();
+                      setShowQRScanner(false);
+                      setScanningQR(false);
+                    } : handleQRScan}
                     type="button"
                     className={`px-4 py-2 text-white rounded-lg transition-colors flex items-center justify-center ${
                       scanningQR 
@@ -486,7 +538,7 @@ const BalanceCard = ({ userId, role }) => {
                 
                 {/* QR-Scanner Container */}
                 {scanningQR && (
-                  <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                  <div ref={qrScannerRef} className="mt-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
                     <p className="text-xs text-gray-600 dark:text-gray-400 mb-3 text-center">
                       Halte den QR-Code vor die Kamera
                     </p>
@@ -524,7 +576,9 @@ const BalanceCard = ({ userId, role }) => {
             <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex space-x-3">
               <button
                 onClick={() => {
-                  stopScanner();
+                  stopQRScanner();
+                  setShowQRScanner(false);
+                  setScanningQR(false);
                   setShowSendMoneyModal(false);
                   setSendError('');
                   setSendSuccess('');
