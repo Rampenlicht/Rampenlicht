@@ -17,7 +17,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 RUN rm /etc/nginx/conf.d/default.conf
 COPY <<EOF /etc/nginx/conf.d/default.conf
 server {
-  listen 80;
+  listen 3000;
   server_name _;
 
   root /usr/share/nginx/html;
@@ -33,5 +33,5 @@ server {
 }
 EOF
 
-EXPOSE 80
+EXPOSE 3000
 CMD ["nginx", "-g", "daemon off;"]
