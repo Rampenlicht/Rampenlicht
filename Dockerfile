@@ -13,7 +13,8 @@ FROM nginx:stable-alpine AS runner
 # Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Replace default nginx config
+# Replace default nginx config properly
+RUN rm /etc/nginx/conf.d/default.conf
 COPY <<EOF /etc/nginx/conf.d/default.conf
 server {
   listen 80;
@@ -22,12 +23,10 @@ server {
   root /usr/share/nginx/html;
   index index.html;
 
-  # Support SPA routing (React Router)
   location / {
     try_files \$uri /index.html;
   }
 
-  # Ensure WebSocket upgrade headers are passed through
   proxy_http_version 1.1;
   proxy_set_header Upgrade \$http_upgrade;
   proxy_set_header Connection "upgrade";
