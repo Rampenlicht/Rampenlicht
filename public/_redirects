@@ -1,0 +1,6 @@
+# Netlify Redirects für SPA (Single Page Application)
+# Alle Routes werden zu index.html weitergeleitet
+# React Router übernimmt dann das Client-Side Routing
+
+/*    /index.html   200
+

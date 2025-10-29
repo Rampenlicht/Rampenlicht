@@ -1,0 +1,48 @@
+# Netlify Configuration für SPA (Single Page Application)
+# Diese Datei sorgt dafür, dass alle Routes zu index.html weitergeleitet werden
+
+[build]
+  # Build-Command für Vite
+  command = "npm run build"
+  # Output-Verzeichnis nach dem Build
+  publish = "dist"
+
+# Wichtig: Alle Routes zu index.html weiterleiten
+# Dies ist notwendig für Client-Side Routing (React Router)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Headers für bessere Performance und Sicherheit
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Security Headers
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    
+    # Cache-Control für statische Assets
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    # Lange Cache-Zeit für Vite-generierte Assets (mit Hashes)
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Environment Variables (optional - besser über Netlify UI setzen)
+# [context.production.environment]
+#   NODE_VERSION = "22"
+
