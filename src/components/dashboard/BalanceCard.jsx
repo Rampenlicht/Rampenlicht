@@ -41,36 +41,77 @@ const BalanceCard = ({ userId, role }) => {
 
   // QR-Code Scanner starten
   const handleQRScan = async () => {
-    setScanningQR(true);
+    console.log('🔵 Scanner-Button geklickt');
     setSendError('');
-
-    try {
-      // Scanner initialisieren
-      const scanner = new Html5QrcodeScanner('qr-reader', {
-        fps: 10,
-        qrbox: { width: 250, height: 250 },
-        aspectRatio: 1.0,
-      });
-
-      scannerInstanceRef.current = scanner;
-
-      scanner.render(
-        (decodedText) => {
-          // QR-Code erfolgreich gescannt
-          console.log('QR-Code gescannt:', decodedText);
-          setSendToIdentifier(decodedText.toUpperCase());
-          stopScanner();
-        },
-        (error) => {
-          // Fehler beim Scannen (ignorieren, da häufig)
-          // console.log('Scan error:', error);
-        }
-      );
-    } catch (error) {
-      console.error('Scanner-Fehler:', error);
-      setSendError('Kamera-Zugriff fehlgeschlagen. Bitte erlauben Sie den Kamera-Zugriff.');
-      setScanningQR(false);
+    
+    // Prüfe ob MediaDevices API verfügbar ist
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setSendError('Kamera wird von Ihrem Browser nicht unterstützt. Bitte geben Sie die ID manuell ein.');
+      return;
     }
+
+    // Zeige Scanner-Container sofort an
+    setScanningQR(true);
+
+    // Warte kurz, damit das DOM-Element geladen ist
+    setTimeout(async () => {
+      try {
+        console.log('🔵 Initialisiere Scanner für iOS/iPhone...');
+        
+        // Für iOS: Spezielle Konfiguration
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        console.log('📱 iOS erkannt:', isIOS);
+        
+        // Scanner initialisieren mit iOS-optimierten Einstellungen
+        const scanner = new Html5QrcodeScanner('qr-reader', {
+          fps: 10,
+          qrbox: isIOS ? 200 : 250,  // Kleinere Box für iOS
+          aspectRatio: 1.0,
+          rememberLastUsedCamera: true,
+          showTorchButtonIfSupported: true,
+          // Wichtig für iOS: Explizit die Kamera-Auswahl erlauben
+          videoConstraints: {
+            facingMode: { ideal: 'environment' }  // Rückkamera bevorzugen
+          }
+        });
+
+        scannerInstanceRef.current = scanner;
+
+        scanner.render(
+          (decodedText) => {
+            // QR-Code erfolgreich gescannt
+            console.log('✅ QR-Code gescannt:', decodedText);
+            setSendToIdentifier(decodedText.toUpperCase());
+            stopScanner();
+          },
+          (errorMessage) => {
+            // Diese Fehler sind normal während des Scan-Prozesses
+            // und müssen nicht geloggt werden
+          }
+        );
+        
+        console.log('✅ Scanner gestartet - Warte auf Kamera-Berechtigung...');
+      } catch (error) {
+        console.error('❌ Scanner-Fehler:', error);
+        
+        let errorMsg = 'Scanner konnte nicht gestartet werden. ';
+        
+        if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+          errorMsg = 'Kamera-Zugriff wurde verweigert. Bitte erlauben Sie den Zugriff in den Safari-Einstellungen: Einstellungen > Safari > Kamera > "Fragen" oder "Zulassen".';
+        } else if (error.name === 'NotFoundError') {
+          errorMsg = 'Keine Kamera gefunden. Bitte geben Sie die ID manuell ein.';
+        } else if (error.name === 'NotReadableError') {
+          errorMsg = 'Kamera wird bereits verwendet. Bitte schließen Sie andere Apps.';
+        } else if (error.name === 'SecurityError') {
+          errorMsg = 'Kamera-Zugriff blockiert. Die App muss über HTTPS geladen werden.';
+        } else {
+          errorMsg += error.message || 'Bitte versuchen Sie es erneut oder geben Sie die ID manuell ein.';
+        }
+        
+        setSendError(errorMsg);
+        setScanningQR(false);
+      }
+    }, 400);  // Längere Wartezeit für iOS
   };
 
   // QR-Scanner stoppen
