@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase, registerChannel, unregisterChannel } from '../../lib/supabase';
 
 const RecentTransactions = ({ userId }) => {
   const [transactions, setTransactions] = useState([]);
@@ -156,37 +156,73 @@ const RecentTransactions = ({ userId }) => {
     // Initialer Channel-Setup
     setupRealtimeChannel();
 
-    // Visibility Change Handler - Update beim Tab-Wechsel
+    // PWA Visibility Change Handler - Update beim Tab-Wechsel
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        console.log('👀 App wieder sichtbar, aktualisiere Transaktionen und reconnect...');
+        console.log('👀 PWA wieder sichtbar, aktualisiere Transaktionen und reconnect...');
         loadTransactions();
         
         // Reconnect Realtime wenn nötig
         if (channelRef && channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting Realtime...');
+          console.log('🔄 Reconnecting Transactions Realtime...');
           setupRealtimeChannel();
         }
+      } else {
+        console.log('🌙 PWA in Hintergrund - Transactions Channel bleibt aktiv');
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Page Focus Handler - Update bei App-Fokus (wichtig für iOS)
+    // PWA Page Focus Handler - Update bei App-Fokus (wichtig für iOS PWA)
     const handleFocus = () => {
-      console.log('🎯 App fokussiert, aktualisiere Transaktionen...');
+      console.log('🎯 PWA fokussiert, aktualisiere Transaktionen...');
       loadTransactions();
       
       // Reconnect Realtime wenn nötig
       if (channelRef && channelRef.state === 'closed') {
-        console.log('🔄 Reconnecting Realtime...');
+        console.log('🔄 Reconnecting Transactions Realtime...');
         setupRealtimeChannel();
       }
     };
     window.addEventListener('focus', handleFocus);
 
+    // PWA PageShow Event - Wichtig für iOS PWA Back/Forward Cache
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        console.log('🔄 PWA aus Back/Forward Cache - Force Reconnect Transactions');
+        loadTransactions();
+        
+        // Force Reconnect nach BFCache
+        setTimeout(() => {
+          if (!channelRef || channelRef.state === 'closed') {
+            console.log('🔄 Force Reconnecting Transactions nach BFCache...');
+            setupRealtimeChannel();
+          }
+        }, 500);
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+
+    // PWA Freeze/Resume Events (iOS)
+    const handleResume = () => {
+      console.log('▶️ PWA resumed, prüfe Transactions Connection...');
+      
+      // Prüfe Channel nach kurzer Verzögerung
+      setTimeout(() => {
+        if (!channelRef || channelRef.state === 'closed') {
+          console.log('🔄 Reconnecting Transactions nach Resume...');
+          setupRealtimeChannel();
+        } else {
+          console.log('✅ Transactions Channel noch aktiv');
+        }
+      }, 1000);
+    };
+    document.addEventListener('resume', handleResume);
+
     return () => {
       console.log('🧹 Cleanup: Removing transactions channel and intervals');
       if (channelRef) {
+        unregisterChannel(`transactions-${userId}`);
         supabase.removeChannel(channelRef);
         channelRef = null;
       }
@@ -196,6 +232,8 @@ const RecentTransactions = ({ userId }) => {
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('resume', handleResume);
     };
   }, [userId]);
 

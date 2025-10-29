@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Html5Qrcode } from 'html5-qrcode';
-import { supabase } from '../../lib/supabase';
+import { supabase, registerChannel, unregisterChannel } from '../../lib/supabase';
 import { profileService } from '../../services/profileService';
 
 const BalanceCard = ({ userId, role }) => {
@@ -420,37 +420,73 @@ const BalanceCard = ({ userId, role }) => {
     // Initialer Channel-Setup
     setupRealtimeChannel();
 
-    // Visibility Change Handler - Update beim Tab-Wechsel
+    // PWA Visibility Change Handler - Update beim Tab-Wechsel
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        console.log('👀 App wieder sichtbar, aktualisiere Balance und reconnect...');
+        console.log('👀 PWA wieder sichtbar, aktualisiere Balance und reconnect...');
         loadBalance();
         
         // Reconnect Realtime wenn nötig
         if (channelRef && channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting Realtime...');
+          console.log('🔄 Reconnecting Balance Realtime...');
           setupRealtimeChannel();
         }
+      } else {
+        console.log('🌙 PWA in Hintergrund - Balance Channel bleibt aktiv');
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Page Focus Handler - Update bei App-Fokus (wichtig für iOS)
+    // PWA Page Focus Handler - Update bei App-Fokus (wichtig für iOS PWA)
     const handleFocus = () => {
-      console.log('🎯 App fokussiert, aktualisiere Balance...');
+      console.log('🎯 PWA fokussiert, aktualisiere Balance...');
       loadBalance();
       
       // Reconnect Realtime wenn nötig
       if (channelRef && channelRef.state === 'closed') {
-        console.log('🔄 Reconnecting Realtime...');
+        console.log('🔄 Reconnecting Balance Realtime...');
         setupRealtimeChannel();
       }
     };
     window.addEventListener('focus', handleFocus);
 
+    // PWA PageShow Event - Wichtig für iOS PWA Back/Forward Cache
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        console.log('🔄 PWA aus Back/Forward Cache - Force Reconnect');
+        loadBalance();
+        
+        // Force Reconnect nach BFCache
+        setTimeout(() => {
+          if (!channelRef || channelRef.state === 'closed') {
+            console.log('🔄 Force Reconnecting nach BFCache...');
+            setupRealtimeChannel();
+          }
+        }, 500);
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+
+    // PWA Freeze/Resume Events (iOS)
+    const handleResume = () => {
+      console.log('▶️ PWA resumed, prüfe Connection...');
+      
+      // Prüfe Channel nach kurzer Verzögerung
+      setTimeout(() => {
+        if (!channelRef || channelRef.state === 'closed') {
+          console.log('🔄 Reconnecting nach Resume...');
+          setupRealtimeChannel();
+        } else {
+          console.log('✅ Channel noch aktiv');
+        }
+      }, 1000);
+    };
+    document.addEventListener('resume', handleResume);
+
     return () => {
       console.log('🧹 Cleanup: Removing Balance channel and intervals');
       if (channelRef) {
+        unregisterChannel(`balance-${userId}`);
         supabase.removeChannel(channelRef);
         channelRef = null;
       }
@@ -460,6 +496,8 @@ const BalanceCard = ({ userId, role }) => {
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('resume', handleResume);
     };
   }, [userId]);
 
