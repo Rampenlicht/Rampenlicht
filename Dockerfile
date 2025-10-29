@@ -1,43 +1,38 @@
-# Multi-Stage Dockerfile für Coolify/Railway
-# Optimiert für Vite + React SPA
-
 # ==================== BUILD STAGE ====================
 FROM node:22-alpine AS builder
 
 WORKDIR /app
-
-# Copy package files
 COPY package*.json ./
-
-# Install dependencies
 RUN npm ci
-
-# Copy source code
 COPY . .
-
-# Build the app
 RUN npm run build
 
 # ==================== PRODUCTION STAGE ====================
-FROM node:22-alpine AS runner
+FROM nginx:stable-alpine AS runner
 
-WORKDIR /app
+# Copy built files
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Install serve globally
-RUN npm install -g serve@14.2.3
+# Replace default nginx config
+COPY <<EOF /etc/nginx/conf.d/default.conf
+server {
+  listen 80;
+  server_name _;
 
-# Copy built files from builder
-COPY --from=builder /app/dist ./dist
+  root /usr/share/nginx/html;
+  index index.html;
 
-# Expose port (Coolify/Railway will use PORT env variable)
-EXPOSE 3000
+  # Support SPA routing (React Router)
+  location / {
+    try_files \$uri /index.html;
+  }
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 3000), (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+  # Ensure WebSocket upgrade headers are passed through
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade \$http_upgrade;
+  proxy_set_header Connection "upgrade";
+}
+EOF
 
-# Start the app with serve
-# -s = Single Page Application mode (wichtig für React Router!)
-# -l = Listen port (verwendet PORT env variable)
-CMD ["sh", "-c", "serve -s dist -l ${PORT:-3000}"]
-
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
