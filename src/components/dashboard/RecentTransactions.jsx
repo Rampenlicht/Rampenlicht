@@ -12,7 +12,11 @@ const RecentTransactions = ({ userId }) => {
     const loadTransactions = async () => {
       const { data, error } = await supabase
         .from('transactions')
-        .select('*')
+        .select(`
+          *,
+          sender:sender_id (id, name, email),
+          receiver:receiver_id (id, name, email)
+        `)
         .eq('user_id', userId)
         .order('timestamp', { ascending: false })
         .limit(5);
@@ -25,7 +29,10 @@ const RecentTransactions = ({ userId }) => {
 
     loadTransactions();
 
-    // Realtime Subscription für neue Transaktionen
+    let realtimeConnected = false;
+    let pollInterval = null;
+
+    // Realtime Subscription für Transaktions-Updates
     const channel = supabase
       .channel(`transactions-${userId}`)
       .on(
@@ -37,7 +44,8 @@ const RecentTransactions = ({ userId }) => {
           filter: `user_id=eq.${userId}`,
         },
         (payload) => {
-          console.log('Neue Transaktion erhalten:', payload);
+          console.log('✅ Neue Transaktion erhalten:', payload);
+          realtimeConnected = true;
           setTransactions((prev) => [payload.new, ...prev].slice(0, 5));
           setNewTransactionIds((prev) => new Set(prev).add(payload.new.id));
           
@@ -51,10 +59,97 @@ const RecentTransactions = ({ userId }) => {
           }, 3000);
         }
       )
-      .subscribe();
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'transactions',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          console.log('🔄 Transaktion aktualisiert:', payload);
+          setTransactions((prev) =>
+            prev.map((t) => (t.id === payload.new.id ? payload.new : t))
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'transactions',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          console.log('🗑️ Transaktion gelöscht:', payload);
+          setTransactions((prev) => prev.filter((t) => t.id !== payload.old.id));
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('🔌 Realtime Status (Transactions):', status);
+
+        if (err) {
+          console.error('❌ Realtime Subscription Error (Transactions):', err);
+        }
+
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime verbunden! Transaktionen werden live aktualisiert.');
+          realtimeConnected = true;
+
+          // Polling stoppen, wenn es läuft
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
+
+          // Backup-Check alle 5 Minuten
+          pollInterval = setInterval(() => {
+            console.log('🔄 Backup Check (Realtime aktiv)...');
+            loadTransactions();
+          }, 300000);
+
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.error('❌ Realtime Fehler für Transaktionen, aktiviere Polling!');
+          realtimeConnected = false;
+
+          // Bei Fehler: Polling alle 10 Sekunden
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+
+          pollInterval = setInterval(() => {
+            console.log('🔄 Polling Transaktionen (Realtime inaktiv)...');
+            loadTransactions();
+          }, 10000);
+        }
+      });
+
+    // Visibility Change Handler - Update beim Tab-Wechsel
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👀 App wieder sichtbar, aktualisiere Transaktionen...');
+        loadTransactions();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Page Focus Handler - Update bei App-Fokus (wichtig für iOS)
+    const handleFocus = () => {
+      console.log('🎯 App fokussiert, aktualisiere Transaktionen...');
+      loadTransactions();
+    };
+    window.addEventListener('focus', handleFocus);
 
     return () => {
+      console.log('🧹 Cleanup: Removing transactions channel and intervals');
       supabase.removeChannel(channel);
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [userId]);
 
@@ -86,6 +181,12 @@ const RecentTransactions = ({ userId }) => {
               const isPositive = transaction.type === 'add';
               const isNegative = transaction.type === 'remove';
               const isSend = transaction.type === 'send';
+              const isReceive = transaction.type === 'receive';
+              
+              // Name des Senders ermitteln (wenn Geld empfangen)
+              const senderName = isReceive && transaction.sender 
+                ? (transaction.sender.name || transaction.sender.email)
+                : null;
               
               return (
                 <div 
@@ -99,20 +200,20 @@ const RecentTransactions = ({ userId }) => {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center space-x-3">
                       <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${
-                        isPositive 
+                        isPositive || isReceive
                           ? 'bg-green-100 dark:bg-green-900/30'
                           : isNegative || isSend
                           ? 'bg-red-100 dark:bg-red-900/30'
                           : 'bg-blue-100 dark:bg-blue-900/30'
                       }`}>
                         <svg className={`h-4 w-4 ${
-                          isPositive 
+                          isPositive || isReceive
                             ? 'text-green-600 dark:text-green-400'
                             : isNegative || isSend
                             ? 'text-red-600 dark:text-red-400'
                             : 'text-blue-600 dark:text-blue-400'
                         }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          {isPositive && (
+                          {(isPositive || isReceive) && (
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
                           )}
                           {(isNegative || isSend) && (
@@ -125,21 +226,24 @@ const RecentTransactions = ({ userId }) => {
                           {isPositive && 'Guthaben aufgeladen'}
                           {isNegative && 'Guthaben abgebucht'}
                           {isSend && 'Geld gesendet'}
+                          {isReceive && 'Geld empfangen'}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
                           {isPositive && 'Aufladung'}
                           {isNegative && 'Abbuchung'}
                           {isSend && 'Überweisung'}
+                          {isReceive && senderName && `Von ${senderName}`}
+                          {isReceive && !senderName && 'Überweisung'}
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className={`text-sm font-semibold ${
-                        isPositive 
+                        isPositive || isReceive
                           ? 'text-green-600 dark:text-green-400'
                           : 'text-red-600 dark:text-red-400'
                       }`}>
-                        {isPositive ? '+' : '-'}€{Math.abs(transaction.amount).toFixed(2)}
+                        {(isPositive || isReceive) ? '+' : '-'}€{Math.abs(transaction.amount).toFixed(2)}
                       </p>
                     </div>
                   </div>

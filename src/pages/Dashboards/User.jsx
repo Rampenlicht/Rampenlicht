@@ -4,6 +4,7 @@ import { profileService } from '../../services/profileService';
 import BottomNav from '../../components/BottomNav';
 import HeaderFix from '../../components/HeaderFix';
 import HomeTab from '../Tabs/HomeTab';
+import ProfilTab from '../Tabs/ProfilTab';
 
 function UserDashboard() {
   const [activeTab, setActiveTab] = useState('home');
@@ -67,25 +68,7 @@ function UserDashboard() {
           </div>
         );
       case 'profil':
-        return (
-          <div className="space-y-6">
-            <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
-              Profil
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300">
-              E-Mail: {user?.email}
-            </p>
-            <p className="text-gray-600 dark:text-gray-300">
-              Rolle: {profile.role}
-            </p>
-            <button
-              onClick={signOut}
-              className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-            >
-              Abmelden
-            </button>
-          </div>
-        );
+        return <ProfilTab profile={profile} />;
       default:
         return null;
     }

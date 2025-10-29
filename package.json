@@ -1,7 +1,7 @@
 {
   "name": "rampenlicht",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Digitale Guthaben-Verwaltung - Client-Side SPA mit Supabase Backend",
   "engines": {
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.76.1",
+    "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.548.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.1",
