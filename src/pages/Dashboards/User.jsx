@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { profileService } from '../../services/profileService';
-import BottomNav from '../../components/BottomNav';
-import HeaderFix from '../../components/HeaderFix';
-import HomeTab from '../Tabs/HomeTab';
-import ProfilTab from '../Tabs/ProfilTab';
-
+import BottomNav from '../../components/dashboard/BottomNav';
+import HeaderFix from '../../components/dashboard/HeaderFix';
+import HomeTab from '../../components/Tabs/HomeTab';
+import ProfilTab from '../../components/Tabs/ProfilTab';
 function UserDashboard() {
   const [activeTab, setActiveTab] = useState('home');
   const [profile, setProfile] = useState(null);

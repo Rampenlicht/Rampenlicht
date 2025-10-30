@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import BottomNav from '../../components/BottomNav';
+import BottomNav from '../../components/dashboard/BottomNav';
+import HeaderFix from '../../components/dashboard/HeaderFix';
+import HomeTab from '../../components/Tabs/HomeTab';
+import ProfilTab from '../../components/Tabs/ProfilTab';
 
 function CashierDashboard() {
   const [activeTab, setActiveTab] = useState('home');

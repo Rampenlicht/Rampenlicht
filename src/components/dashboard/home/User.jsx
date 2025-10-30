@@ -1,25 +1,12 @@
-import { useEffect, useState } from 'react';
-import { profileService } from '../../services/profileService';
 import { QRCodeSVG } from 'qrcode.react';
 
-const UserCard = ({ userId }) => {
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadProfile = async () => {
-      if (userId) {
-        const { data } = await profileService.getProfile(userId);
-        if (data) {
-          setProfile(data);
-        }
-        setLoading(false);
-      }
-    };
-
-    loadProfile();
-  }, [userId]);
-
+const User = ({ 
+  name = '',
+  email = '',
+  qrcodeId = '',
+  userId = '',
+  loading = false 
+}) => {
   if (loading) {
     return (
       <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 dark:border-gray-700/20 shadow-xl transition-colors duration-300">
@@ -50,16 +37,16 @@ const UserCard = ({ userId }) => {
             Willkommen zurück!
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
-            {profile?.name || profile?.email}
+            {name || email}
           </p>
         </div>
 
         {/* QR Code */}
         <div className="flex flex-col items-center space-y-2 flex-shrink-0">
           <div className="bg-white p-2 rounded-lg border border-gray-200 dark:border-gray-600">
-            {profile?.qrcode_id ? (
+            {qrcodeId ? (
               <QRCodeSVG 
-                value={profile.qrcode_id} 
+                value={qrcodeId} 
                 size={80}
                 level="H"
                 className="rounded"
@@ -73,7 +60,7 @@ const UserCard = ({ userId }) => {
             )}
           </div>
           <p className="text-xs text-gray-400 dark:text-gray-500 font-mono">
-            ID: {profile?.qrcode_id || userId.slice(0, 8).toUpperCase()}
+            ID: {qrcodeId || (userId ? userId.slice(0, 8).toUpperCase() : 'N/A')}
           </p>
         </div>
       </div>
@@ -81,5 +68,5 @@ const UserCard = ({ userId }) => {
   );
 };
 
-export default UserCard;
+export default User;
 

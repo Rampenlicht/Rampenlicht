@@ -1,6 +1,6 @@
 import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useState } from 'react';
-import { profileService } from '../../services/profileService';
+import { profileService } from '../../../services/profileService';
 
 const QRDisplay = ({ userId, userName }) => {
   const [qrcodeId, setQrcodeId] = useState(null);
