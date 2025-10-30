@@ -39,6 +39,8 @@
     "postcss": "^8.5.6",
     "serve": "^14.2.3",
     "tailwindcss": "^4.1.16",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "vite-plugin-pwa": "^1.1.0",
+    "workbox-window": "^7.3.0"
   }
 }
