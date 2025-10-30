@@ -7,9 +7,32 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Supabase URL oder Anon Key fehlen! Bitte .env Datei überprüfen.')
 }
 
-// Konfiguration mit verbesserter PWA-Unterstützung
+// Prüfe, ob WebSockets vom Server unterstützt werden
+const isWebSocketSupported = () => {
+  // Netlify, statische Hosts und manche Server unterstützen keine WebSockets
+  const hostname = window.location.hostname;
+  const isNetlify = hostname.includes('netlify.app');
+  const isStaticHost = hostname.includes('pages.dev') || hostname.includes('vercel.app');
+  
+  // Wenn explizit deaktiviert via ENV
+  if (import.meta.env.VITE_ENABLE_REALTIME === 'false') {
+    console.warn('⚠️ Realtime ist via ENV deaktiviert - verwende Polling');
+    return false;
+  }
+  
+  if (isNetlify || isStaticHost) {
+    console.warn('⚠️ Statischer Host erkannt - WebSockets nicht verfügbar');
+    return false;
+  }
+  
+  return true;
+};
+
+const websocketSupported = isWebSocketSupported();
+
+// Konfiguration mit verbesserter PWA-Unterstützung und WebSocket-Detection
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  realtime: {
+  realtime: websocketSupported ? {
     params: {
       eventsPerSecond: 10  // Erhöht für bessere Responsiveness
     },
@@ -17,10 +40,21 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     timeout: 30000,
     // Heartbeat für Keep-Alive (wichtig für PWA!)
     heartbeatIntervalMs: 15000,
-    // Reconnect-Logik
+    // Reconnect-Logik mit Limit
     reconnectAfterMs: (tries) => {
-      // Exponential backoff: 1s, 2s, 4s, 8s, max 10s
-      return Math.min(1000 * Math.pow(2, tries), 10000);
+      // Nach 3 Versuchen aufgeben (WebSocket funktioniert nicht)
+      if (tries > 3) {
+        console.error('❌ WebSocket-Verbindung fehlgeschlagen nach 3 Versuchen');
+        console.warn('💡 Verwende Polling als Fallback');
+        return null; // Kein weiterer Reconnect
+      }
+      // Exponential backoff: 1s, 2s, 4s
+      return Math.min(1000 * Math.pow(2, tries), 4000);
+    }
+  } : {
+    // Realtime deaktiviert - Polling wird verwendet
+    params: {
+      eventsPerSecond: 0
     }
   },
   auth: {
@@ -38,6 +72,24 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     }
   }
 })
+
+// Status-Variable für WebSocket-Support
+let realtimeAvailable = websocketSupported;
+
+/**
+ * Prüft, ob Realtime verfügbar ist
+ */
+export const isRealtimeAvailable = () => realtimeAvailable;
+
+/**
+ * Setzt Realtime-Verfügbarkeit (wird von Komponenten aufgerufen)
+ */
+export const setRealtimeAvailable = (available) => {
+  realtimeAvailable = available;
+  if (!available) {
+    console.warn('⚠️ Realtime nicht verfügbar - Polling aktiviert');
+  }
+};
 
 // PWA Lifecycle Management
 let activeChannels = new Map();

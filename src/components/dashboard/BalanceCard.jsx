@@ -1,14 +1,14 @@
-import { useEffect, useState, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { Html5Qrcode } from 'html5-qrcode';
-import { supabase, registerChannel, unregisterChannel } from '../../lib/supabase';
-import { profileService } from '../../services/profileService';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom'; 
+import { Html5Qrcode } from 'html5-qrcode'; 
+import { supabase } from '../../lib/supabase';
 
 const BalanceCard = ({ userId, role }) => {
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showSendMoneyModal, setShowSendMoneyModal] = useState(false);
-  
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+
   // Send Money State
   const [sendToIdentifier, setSendToIdentifier] = useState('');
   const [sendAmount, setSendAmount] = useState('');
@@ -17,39 +17,60 @@ const BalanceCard = ({ userId, role }) => {
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [sendError, setSendError] = useState('');
   const [sendSuccess, setSendSuccess] = useState('');
-  const [profile, setProfile] = useState(null);
   
   // QR Scanner Refs
   const qrScannerRef = useRef(null);
   const html5QrCodeRef = useRef(null);
+  const channelRef = useRef(null);
+  const pollIntervalRef = useRef(null);
 
-  const loadBalance = async () => {
+  const loadBalance = useCallback(async () => {
     if (!userId) return;
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('balance')
-      .eq('id', userId)
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('balance')
+        .eq('id', userId)
       .maybeSingle();
 
     if (data && !error) {
       setBalance(data.balance);
-      setProfile(data);
     }
     setLoading(false);
-  };
+  }, [userId]);
 
-  // QR-Code Scanner starten (Button-Klick)
-  const handleQRScan = () => {
-    console.log('🔵 Scanner-Button geklickt');
-    setSendError('');
-    setShowQRScanner(true);
-    setScanningQR(true);
-  };
+  // QR-Scanner stoppen
+  const stopQRScanner = useCallback(async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        // Prüfe, ob der Scanner läuft, bevor wir ihn stoppen
+        const isRunning = html5QrCodeRef.current.getState() === 2; // 2 = SCANNING
+        
+        if (isRunning) {
+          console.log('🛑 Stoppe Scanner...');
+          await html5QrCodeRef.current.stop();
+          console.log('✅ Scanner gestoppt');
+        } else {
+          console.log('ℹ️ Scanner läuft nicht, überspringe Stop');
+        }
+        
+        html5QrCodeRef.current = null;
+      } catch (error) {
+        console.error('Fehler beim Stoppen des QR-Scanners:', error);
+        html5QrCodeRef.current = null;
+      }
+    }
+    
+    // DOM-Cleanup
+    const qrReaderElement = document.getElementById('qr-reader');
+    if (qrReaderElement) {
+      qrReaderElement.innerHTML = '';
+    }
+  }, []);
 
-  // QR-Scanner tatsächlich starten (nach DOM-Rendering)
-  const startQRScanner = async () => {
+  // QR-Scanner starten
+  const startQRScanner = useCallback(async () => {
     if (!qrScannerRef.current) return;
 
     try {
@@ -61,10 +82,8 @@ const BalanceCard = ({ userId, role }) => {
       console.log('📷 Verfügbare Kameras:', cameras.length);
       
       if (cameras && cameras.length) {
-        // Versuche die Rückkamera zu finden
-        let selectedCamera = cameras[0]; // Fallback zur ersten Kamera
+        let selectedCamera = cameras[0];
         
-        // Suche nach der Rückkamera (normalerweise die zweite Kamera oder eine mit "back" im Namen)
         for (const camera of cameras) {
           const label = camera.label.toLowerCase();
           if (label.includes('back') || label.includes('hinten') || label.includes('rear')) {
@@ -74,8 +93,6 @@ const BalanceCard = ({ userId, role }) => {
           }
         }
         
-        // Wenn es mehr als eine Kamera gibt und keine Rückkamera gefunden wurde,
-        // verwende die zweite Kamera (oft die Rückkamera)
         if (cameras.length > 1 && selectedCamera === cameras[0]) {
           selectedCamera = cameras[1];
           console.log('📷 Zweite Kamera verwendet:', selectedCamera.label);
@@ -91,7 +108,6 @@ const BalanceCard = ({ userId, role }) => {
             aspectRatio: 1.0
           },
           (decodedText) => {
-            // QR-Code erfolgreich gescannt
             console.log('✅ QR-Code gescannt:', decodedText);
             setSendToIdentifier(decodedText.toUpperCase());
             stopQRScanner();
@@ -100,7 +116,7 @@ const BalanceCard = ({ userId, role }) => {
             setSendSuccess(`QR-Code erfolgreich gescannt: ${decodedText}`);
           },
           (errorMessage) => {
-            // Fehler beim Scannen - ignorieren (normal während des Scannens)
+            // Ignorieren während des Scannens
           }
         );
         
@@ -114,7 +130,7 @@ const BalanceCard = ({ userId, role }) => {
       let errorMsg = 'Kamera konnte nicht gestartet werden. ';
       
       if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
-        errorMsg = 'Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff in den Safari-Einstellungen: Einstellungen > Safari > Kamera > "Fragen".';
+        errorMsg = 'Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff in den Safari-Einstellungen.';
       } else if (error.name === 'NotFoundError') {
         errorMsg = 'Keine Kamera gefunden. Bitte geben Sie die ID manuell ein.';
       } else if (error.name === 'NotReadableError') {
@@ -127,58 +143,15 @@ const BalanceCard = ({ userId, role }) => {
       setShowQRScanner(false);
       setScanningQR(false);
     }
+  }, [stopQRScanner]);
+
+  // QR-Code Scanner starten (Button-Klick)
+  const handleQRScan = () => {
+    console.log('🔵 Scanner-Button geklickt');
+    setSendError('');
+    setShowQRScanner(true);
+    setScanningQR(true);
   };
-
-  // QR-Scanner stoppen
-  const stopQRScanner = async () => {
-    if (html5QrCodeRef.current) {
-      try {
-        console.log('🛑 Stoppe Scanner...');
-        await html5QrCodeRef.current.stop();
-        html5QrCodeRef.current = null;
-        console.log('✅ Scanner gestoppt');
-      } catch (error) {
-        console.error('Fehler beim Stoppen des QR-Scanners:', error);
-        html5QrCodeRef.current = null;
-      }
-    }
-    
-    // DOM-Cleanup: Entferne alle Kamera-Elemente
-    const qrReaderElement = document.getElementById('qr-reader');
-    if (qrReaderElement) {
-      qrReaderElement.innerHTML = '';
-    }
-  };
-
-  // Scanner-Lifecycle Management
-  useEffect(() => {
-    if (showQRScanner && scanningQR) {
-      // Kurze Verzögerung für UI-Rendering
-      setTimeout(startQRScanner, 100);
-    }
-    
-    return () => {
-      if (html5QrCodeRef.current) {
-        stopQRScanner();
-      }
-    };
-  }, [showQRScanner, scanningQR]);
-
-  // Zusätzlicher Cleanup-Effekt für Modal-Schließung
-  useEffect(() => {
-    if (!showQRScanner && html5QrCodeRef.current) {
-      stopQRScanner();
-    }
-  }, [showQRScanner]);
-
-  // Cleanup beim Unmount der gesamten Komponente
-  useEffect(() => {
-    return () => {
-      if (html5QrCodeRef.current) {
-        stopQRScanner();
-      }
-    };
-  }, []);
 
   // Geld senden
   const handleSendMoney = async () => {
@@ -205,7 +178,7 @@ const BalanceCard = ({ userId, role }) => {
     setSendingMoney(true);
 
     try {
-      // Empfänger-Profil anhand der QR-Code-ID finden
+      // Empfänger-Profil finden
       const { data: recipientProfile, error: findError } = await supabase
         .from('profiles')
         .select('id, name, email')
@@ -224,22 +197,16 @@ const BalanceCard = ({ userId, role }) => {
         return;
       }
 
-      // Transaktion für Sender (Abzug)
+      // Transaktion für Sender
       const senderTransaction = {
         user_id: userId,
         amount: -amount,
         type: 'send',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        sender_id: userId,
+        receiver_id: recipientProfile.id,
+        description: `Geld gesendet an ${recipientProfile.name || recipientProfile.email}`
       };
-
-      // Versuche erweiterte Felder hinzuzufügen (falls Spalten existieren)
-      try {
-        senderTransaction.sender_id = userId;
-        senderTransaction.receiver_id = recipientProfile.id;
-        senderTransaction.description = `Geld gesendet an ${recipientProfile.name || recipientProfile.email}`;
-      } catch (e) {
-        console.log('Erweiterte Felder nicht verfügbar, verwende Basis-Felder');
-      }
 
       const { error: senderTransactionError } = await supabase
         .from('transactions')
@@ -250,23 +217,16 @@ const BalanceCard = ({ userId, role }) => {
         throw senderTransactionError;
       }
 
-      // Transaktion für Empfänger (Gutschrift)
+      // Transaktion für Empfänger
       const recipientTransaction = {
         user_id: recipientProfile.id,
         amount: amount,
-        type: 'add', // Fallback auf 'add' falls 'receive' nicht erkannt wird
-        timestamp: new Date().toISOString()
+        type: 'receive',
+        timestamp: new Date().toISOString(),
+        sender_id: userId,
+        receiver_id: recipientProfile.id,
+        description: `Geld empfangen`
       };
-
-      // Versuche erweiterte Felder hinzuzufügen
-      try {
-        recipientTransaction.type = 'receive';
-        recipientTransaction.sender_id = userId;
-        recipientTransaction.receiver_id = recipientProfile.id;
-        recipientTransaction.description = `Geld empfangen`;
-      } catch (e) {
-        console.log('Erweiterte Felder nicht verfügbar, verwende Basis-Felder');
-      }
 
       const { error: recipientTransactionError } = await supabase
         .from('transactions')
@@ -317,38 +277,51 @@ const BalanceCard = ({ userId, role }) => {
 
     } catch (error) {
       console.error('Fehler beim Senden:', error);
-      console.error('Error Details:', error.message, error.details, error.hint);
       setSendError(`Fehler beim Senden: ${error.message || 'Bitte versuchen Sie es erneut.'}`);
     } finally {
       setSendingMoney(false);
     }
   };
 
+  // Scanner-Lifecycle Management
+  useEffect(() => {
+    if (showQRScanner && scanningQR) {
+      setTimeout(() => startQRScanner(), 100);
+    }
+    
+    return () => {
+      if (html5QrCodeRef.current) {
+        stopQRScanner();
+      }
+    };
+  }, [showQRScanner, scanningQR, startQRScanner, stopQRScanner]);
+
+  // Balance laden und Realtime Setup mit Fallback
   useEffect(() => {
     if (!userId) return;
 
     loadBalance();
 
-    let realtimeConnected = false;
-    let pollInterval = null;
-    let channelRef = null;
+    let isSubscribed = false;
+    let reconnectTimeoutRef = null;
 
-    // Realtime Subscription für automatische Updates
     const setupRealtimeChannel = () => {
       // Alten Channel entfernen, falls vorhanden
-      if (channelRef) {
+      if (channelRef.current) {
         console.log('🧹 Entferne alten Balance-Channel...');
-        supabase.removeChannel(channelRef);
-        channelRef = null;
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
 
-      console.log('🔌 Erstelle neuen Balance-Channel...');
+      const channelName = `balance-${userId}`;
+      console.log(`🔌 Erstelle neuen Balance-Channel: ${channelName}`);
+
       const channel = supabase
-        .channel(`balance-${userId}-${Date.now()}`, {
+        .channel(channelName, {
           config: {
             broadcast: { self: true },
-            presence: { key: userId }
-          }
+            presence: { key: userId },
+          },
         })
         .on(
           'postgres_changes',
@@ -360,152 +333,128 @@ const BalanceCard = ({ userId, role }) => {
           },
           (payload) => {
             console.log('✅ Realtime Update erhalten:', payload);
-            realtimeConnected = true;
-            if (payload.new && payload.new.balance !== undefined) {
+            if (payload.new?.balance !== undefined) {
               setBalance(payload.new.balance);
             }
           }
         )
         .subscribe((status, err) => {
-          console.log('🔌 Realtime Status (Balance):', status);
-          
+          console.log('📡 Realtime Status (Balance):', status);
+
           if (err) {
-            console.error('❌ Realtime Subscription Error:', err);
+            console.error('❌ Realtime Fehler:', err);
           }
-          
+
           if (status === 'SUBSCRIBED') {
-            console.log('✅ Realtime verbunden! Kein häufiges Polling benötigt.');
-            realtimeConnected = true;
-            
-            // Polling stoppen, wenn es läuft
-            if (pollInterval) {
-              clearInterval(pollInterval);
-              pollInterval = null;
+            isSubscribed = true;
+            setIsRealtimeConnected(true);
+            console.log('✅ Realtime verbunden (Balance) – kein Polling nötig');
+
+            // Stoppe altes Polling, falls aktiv
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
             }
-            
-            // NUR als Sicherheits-Backup: Alle 5 Minuten einmal prüfen
-            pollInterval = setInterval(() => {
-              console.log('🔄 Backup Check (Realtime aktiv)...');
+
+            // Backup-Polling alle 5 Minuten (falls Server-Event verpasst wird)
+            pollIntervalRef.current = setInterval(() => {
+              console.log('🔄 Backup-Check (Realtime aktiv)…');
               loadBalance();
-            }, 300000); // Alle 5 Minuten
-            
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.error('❌ Realtime Fehler, versuche Reconnect...');
-            realtimeConnected = false;
-            
-            // Channel neu erstellen nach Fehler
-            setTimeout(() => {
-              console.log('🔄 Versuche Channel-Reconnect...');
-              setupRealtimeChannel();
-            }, 2000);
-            
-          } else if (status === 'CLOSED') {
-            console.warn('⚠️ Channel geschlossen');
-            realtimeConnected = false;
-            
-            // Bei Fehler: Polling aktivieren
-            if (!pollInterval) {
-              pollInterval = setInterval(() => {
-                console.log('🔄 Polling Balance (Realtime inaktiv)...');
+            }, 300000); // 5 Minuten
+          }
+
+          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            // Nur reconnecten bei echten Fehlern
+            setIsRealtimeConnected(false);
+            console.warn('⚠️ Realtime Fehler – starte Fallback-Polling');
+
+            // Fallback-Polling aktivieren
+            if (!pollIntervalRef.current) {
+              pollIntervalRef.current = setInterval(() => {
+                console.log('🔄 Polling Balance (Realtime inaktiv)…');
                 loadBalance();
-              }, 5000); // Alle 5 Sekunden
+              }, 5000); // alle 5 Sekunden
+            }
+
+            // Reconnect-Versuch nach kurzer Pause
+            if (reconnectTimeoutRef) {
+              clearTimeout(reconnectTimeoutRef);
+            }
+            reconnectTimeoutRef = setTimeout(() => {
+              console.log('🔄 Versuche Reconnect…');
+              setupRealtimeChannel();
+            }, 3000);
+          }
+
+          else if (status === 'CLOSED') {
+            console.log('📴 Realtime geschlossen (Balance)');
+            
+            // Nur reconnecten, wenn wir vorher connected waren
+            if (isSubscribed) {
+              setIsRealtimeConnected(false);
+              console.warn('⚠️ Verbindung unerwartet geschlossen – starte Fallback');
+
+              // Fallback-Polling aktivieren
+              if (!pollIntervalRef.current) {
+                pollIntervalRef.current = setInterval(() => {
+                  console.log('🔄 Polling Balance (Realtime inaktiv)…');
+                  loadBalance();
+                }, 5000);
+              }
+
+              // Reconnect-Versuch
+              if (reconnectTimeoutRef) {
+                clearTimeout(reconnectTimeoutRef);
+              }
+              reconnectTimeoutRef = setTimeout(() => {
+                console.log('🔄 Versuche Reconnect nach unerwarteter Trennung…');
+                setupRealtimeChannel();
+              }, 3000);
             }
           }
         });
 
-      channelRef = channel;
-      return channel;
+      channelRef.current = channel;
     };
 
-    // Initialer Channel-Setup
+    // Initial starten
     setupRealtimeChannel();
 
-    // PWA Visibility Change Handler - Update beim Tab-Wechsel
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('👀 PWA wieder sichtbar, aktualisiere Balance und reconnect...');
-        loadBalance();
-        
-        // Reconnect Realtime wenn nötig
-        if (channelRef && channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting Balance Realtime...');
-          setupRealtimeChannel();
-        }
-      } else {
-        console.log('🌙 PWA in Hintergrund - Balance Channel bleibt aktiv');
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // PWA Page Focus Handler - Update bei App-Fokus (wichtig für iOS PWA)
-    const handleFocus = () => {
-      console.log('🎯 PWA fokussiert, aktualisiere Balance...');
-      loadBalance();
-      
-      // Reconnect Realtime wenn nötig
-      if (channelRef && channelRef.state === 'closed') {
-        console.log('🔄 Reconnecting Balance Realtime...');
-        setupRealtimeChannel();
-      }
-    };
-    window.addEventListener('focus', handleFocus);
-
-    // PWA PageShow Event - Wichtig für iOS PWA Back/Forward Cache
-    const handlePageShow = (event) => {
-      if (event.persisted) {
-        console.log('🔄 PWA aus Back/Forward Cache - Force Reconnect');
-        loadBalance();
-        
-        // Force Reconnect nach BFCache
-        setTimeout(() => {
-          if (!channelRef || channelRef.state === 'closed') {
-            console.log('🔄 Force Reconnecting nach BFCache...');
-            setupRealtimeChannel();
-          }
-        }, 500);
-      }
-    };
-    window.addEventListener('pageshow', handlePageShow);
-
-    // PWA Freeze/Resume Events (iOS)
-    const handleResume = () => {
-      console.log('▶️ PWA resumed, prüfe Connection...');
-      
-      // Prüfe Channel nach kurzer Verzögerung
-      setTimeout(() => {
-        if (!channelRef || channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting nach Resume...');
-          setupRealtimeChannel();
-        } else {
-          console.log('✅ Channel noch aktiv');
-        }
-      }, 1000);
-    };
-    document.addEventListener('resume', handleResume);
-
+    // Cleanup beim Unmount
     return () => {
-      console.log('🧹 Cleanup: Removing Balance channel and intervals');
-      if (channelRef) {
-        unregisterChannel(`balance-${userId}`);
-        supabase.removeChannel(channelRef);
-        channelRef = null;
+      console.log('🧹 Cleanup: Entferne Balance-Channel & Timer');
+      isSubscribed = false;
+      
+      if (reconnectTimeoutRef) {
+        clearTimeout(reconnectTimeoutRef);
+        reconnectTimeoutRef = null;
       }
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
+      
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('pageshow', handlePageShow);
-      document.removeEventListener('resume', handleResume);
+      
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
-  }, [userId]);
+  }, [userId, loadBalance]);
 
   return (
     <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl p-4 border border-white/20 dark:border-gray-700/20 shadow-lg transition-colors duration-300">
       <div className="flex items-center justify-between mb-4">
         <div className="flex-1 min-w-0 pr-4">
-          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Aktuelles Guthaben</p>
+          <div className="flex items-center space-x-2 mb-1">
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Aktuelles Guthaben</p>
+            <div className="flex items-center space-x-1">
+              <div className={`h-2 w-2 rounded-full ${isRealtimeConnected ? 'bg-green-500' : 'bg-orange-500'} animate-pulse`}></div>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {isRealtimeConnected ? 'Live' : 'Polling'}
+              </span>
+            </div>
+          </div>
           <p className="text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums">
             {loading ? (
               <span className="animate-pulse">--,--</span>
@@ -515,15 +464,17 @@ const BalanceCard = ({ userId, role }) => {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <button 
-            onClick={loadBalance}
-            className="h-10 w-10 bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50 rounded-lg flex items-center justify-center transition-colors duration-200"
-            title="Guthaben aktualisieren"
-          >
-            <svg className="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
+          {!isRealtimeConnected && (
+            <button 
+              onClick={loadBalance}
+              className="h-10 w-10 bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50 rounded-lg flex items-center justify-center transition-colors duration-200"
+              title="Guthaben aktualisieren"
+            >
+              <svg className="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          )}
           <div className="h-12 w-12 bg-green-100 dark:bg-green-900/30 rounded-xl flex items-center justify-center">
             <svg className="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -531,7 +482,7 @@ const BalanceCard = ({ userId, role }) => {
           </div>
         </div>
       </div>
-      <button 
+      <button
         onClick={() => setShowSendMoneyModal(true)}
         className="w-full bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-800 text-white py-2 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2"
       >
@@ -541,7 +492,7 @@ const BalanceCard = ({ userId, role }) => {
         <span>Geld senden</span>
       </button>
 
-      {/* Send Money Modal - Rendered via Portal */}
+      {/* Send Money Modal */}
       {showSendMoneyModal && createPortal(
         <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center p-4" style={{ zIndex: 99999 }}>
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full relative" style={{ zIndex: 100000 }}>
@@ -586,8 +537,8 @@ const BalanceCard = ({ userId, role }) => {
                   Empfänger-ID
                 </label>
                 <div className="flex space-x-2">
-                  <input
-                    type="text"
+            <input
+              type="text"
                     value={sendToIdentifier}
                     onChange={(e) => setSendToIdentifier(e.target.value.toUpperCase())}
                     placeholder="z.B. A1B2C3D4"
@@ -625,7 +576,7 @@ const BalanceCard = ({ userId, role }) => {
                     <p className="text-xs text-gray-600 dark:text-gray-400 mb-3 text-center">
                       Halte den QR-Code vor die Kamera
                     </p>
-                    <div id="qr-reader" className="w-full"></div>
+                    <div id="qr-reader" className="w-full" style={{ boxSizing: 'content-box' }}></div>
                   </div>
                 )}
                 
@@ -640,8 +591,8 @@ const BalanceCard = ({ userId, role }) => {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Betrag (€)
                 </label>
-                <input
-                  type="number"
+            <input
+              type="number"
                   value={sendAmount}
                   onChange={(e) => setSendAmount(e.target.value)}
                   placeholder="0.00"
@@ -704,4 +655,3 @@ const BalanceCard = ({ userId, role }) => {
 };
 
 export default BalanceCard;
-

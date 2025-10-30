@@ -1,50 +1,56 @@
-import { useEffect, useState } from 'react';
-import { supabase, registerChannel, unregisterChannel } from '../../lib/supabase';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { supabase } from '../../lib/supabase';
 
 const RecentTransactions = ({ userId }) => {
   const [transactions, setTransactions] = useState([]);
   const [newTransactionIds, setNewTransactionIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+  
+  const channelRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+
+  const loadTransactions = useCallback(async () => {
+    if (!userId) return;
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .select(`
+        *,
+        sender:sender_id (id, name, email),
+        receiver:receiver_id (id, name, email)
+      `)
+      .eq('user_id', userId)
+      .order('timestamp', { ascending: false })
+      .limit(5);
+
+    if (data && !error) {
+      setTransactions(data);
+    }
+    setLoading(false);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
 
-    const loadTransactions = async () => {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select(`
-          *,
-          sender:sender_id (id, name, email),
-          receiver:receiver_id (id, name, email)
-        `)
-        .eq('user_id', userId)
-        .order('timestamp', { ascending: false })
-        .limit(5);
-
-      if (data && !error) {
-        setTransactions(data);
-      }
-      setLoading(false);
-    };
-
     loadTransactions();
 
-    let realtimeConnected = false;
-    let pollInterval = null;
-    let channelRef = null;
+    let isSubscribed = false;
+    let reconnectTimeoutRef = null;
 
-    // Realtime Subscription für Transaktions-Updates
     const setupRealtimeChannel = () => {
       // Alten Channel entfernen, falls vorhanden
-      if (channelRef) {
+      if (channelRef.current) {
         console.log('🧹 Entferne alten Transactions-Channel...');
-        supabase.removeChannel(channelRef);
-        channelRef = null;
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
 
-      console.log('🔌 Erstelle neuen Transactions-Channel...');
+      const channelName = `transactions-${userId}`;
+      console.log(`🔌 Erstelle neuen Transactions-Channel: ${channelName}`);
+
       const channel = supabase
-        .channel(`transactions-${userId}-${Date.now()}`, {
+        .channel(channelName, {
           config: {
             broadcast: { self: true },
             presence: { key: userId }
@@ -60,7 +66,6 @@ const RecentTransactions = ({ userId }) => {
           },
           (payload) => {
             console.log('✅ Neue Transaktion erhalten:', payload);
-            realtimeConnected = true;
             setTransactions((prev) => [payload.new, ...prev].slice(0, 5));
             setNewTransactionIds((prev) => new Set(prev).add(payload.new.id));
             
@@ -103,139 +108,107 @@ const RecentTransactions = ({ userId }) => {
           }
         )
         .subscribe((status, err) => {
-          console.log('🔌 Realtime Status (Transactions):', status);
+          console.log('📡 Realtime Status (Transactions):', status);
 
           if (err) {
-            console.error('❌ Realtime Subscription Error (Transactions):', err);
+            console.error('❌ Realtime Fehler (Transactions):', err);
           }
 
           if (status === 'SUBSCRIBED') {
-            console.log('✅ Realtime verbunden! Transaktionen werden live aktualisiert.');
-            realtimeConnected = true;
+            isSubscribed = true;
+            setIsRealtimeConnected(true);
+            console.log('✅ Realtime verbunden (Transactions) – kein Polling nötig');
 
-            // Polling stoppen, wenn es läuft
-            if (pollInterval) {
-              clearInterval(pollInterval);
-              pollInterval = null;
+            // Stoppe altes Polling, falls aktiv
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
             }
 
-            // Backup-Check alle 5 Minuten
-            pollInterval = setInterval(() => {
-              console.log('🔄 Backup Check (Realtime aktiv)...');
+            // Backup-Polling alle 5 Minuten
+            pollIntervalRef.current = setInterval(() => {
+              console.log('🔄 Backup-Check (Transactions Realtime aktiv)…');
               loadTransactions();
-            }, 300000);
+            }, 300000); // 5 Minuten
+          }
 
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.error('❌ Realtime Fehler für Transaktionen, versuche Reconnect...');
-            realtimeConnected = false;
+          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            setIsRealtimeConnected(false);
+            console.warn('⚠️ Realtime Fehler (Transactions) – starte Fallback-Polling');
 
-            // Channel neu erstellen nach Fehler
-            setTimeout(() => {
-              console.log('🔄 Versuche Channel-Reconnect...');
-              setupRealtimeChannel();
-            }, 2000);
-
-          } else if (status === 'CLOSED') {
-            console.warn('⚠️ Transactions Channel geschlossen');
-            realtimeConnected = false;
-
-            // Bei Fehler: Polling alle 10 Sekunden
-            if (!pollInterval) {
-              pollInterval = setInterval(() => {
-                console.log('🔄 Polling Transaktionen (Realtime inaktiv)...');
+            // Fallback-Polling aktivieren
+            if (!pollIntervalRef.current) {
+              pollIntervalRef.current = setInterval(() => {
+                console.log('🔄 Polling Transactions (Realtime inaktiv)…');
                 loadTransactions();
-              }, 10000);
+              }, 10000); // alle 10 Sekunden
+            }
+
+            // Reconnect-Versuch nach kurzer Pause
+            if (reconnectTimeoutRef) {
+              clearTimeout(reconnectTimeoutRef);
+            }
+            reconnectTimeoutRef = setTimeout(() => {
+              console.log('🔄 Versuche Reconnect (Transactions)…');
+              setupRealtimeChannel();
+            }, 3000);
+          }
+
+          else if (status === 'CLOSED') {
+            console.log('📴 Realtime geschlossen (Transactions)');
+            
+            // Nur reconnecten, wenn wir vorher connected waren
+            if (isSubscribed) {
+              setIsRealtimeConnected(false);
+              console.warn('⚠️ Transactions-Verbindung unerwartet geschlossen – starte Fallback');
+
+              // Fallback-Polling aktivieren
+              if (!pollIntervalRef.current) {
+                pollIntervalRef.current = setInterval(() => {
+                  console.log('🔄 Polling Transactions (Realtime inaktiv)…');
+                  loadTransactions();
+                }, 10000);
+              }
+
+              // Reconnect-Versuch
+              if (reconnectTimeoutRef) {
+                clearTimeout(reconnectTimeoutRef);
+              }
+              reconnectTimeoutRef = setTimeout(() => {
+                console.log('🔄 Versuche Reconnect nach unerwarteter Trennung (Transactions)…');
+                setupRealtimeChannel();
+              }, 3000);
             }
           }
         });
 
-      channelRef = channel;
-      return channel;
+      channelRef.current = channel;
     };
 
-    // Initialer Channel-Setup
+    // Initial starten
     setupRealtimeChannel();
 
-    // PWA Visibility Change Handler - Update beim Tab-Wechsel
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('👀 PWA wieder sichtbar, aktualisiere Transaktionen und reconnect...');
-        loadTransactions();
-        
-        // Reconnect Realtime wenn nötig
-        if (channelRef && channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting Transactions Realtime...');
-          setupRealtimeChannel();
-        }
-      } else {
-        console.log('🌙 PWA in Hintergrund - Transactions Channel bleibt aktiv');
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // PWA Page Focus Handler - Update bei App-Fokus (wichtig für iOS PWA)
-    const handleFocus = () => {
-      console.log('🎯 PWA fokussiert, aktualisiere Transaktionen...');
-      loadTransactions();
-      
-      // Reconnect Realtime wenn nötig
-      if (channelRef && channelRef.state === 'closed') {
-        console.log('🔄 Reconnecting Transactions Realtime...');
-        setupRealtimeChannel();
-      }
-    };
-    window.addEventListener('focus', handleFocus);
-
-    // PWA PageShow Event - Wichtig für iOS PWA Back/Forward Cache
-    const handlePageShow = (event) => {
-      if (event.persisted) {
-        console.log('🔄 PWA aus Back/Forward Cache - Force Reconnect Transactions');
-        loadTransactions();
-        
-        // Force Reconnect nach BFCache
-        setTimeout(() => {
-          if (!channelRef || channelRef.state === 'closed') {
-            console.log('🔄 Force Reconnecting Transactions nach BFCache...');
-            setupRealtimeChannel();
-          }
-        }, 500);
-      }
-    };
-    window.addEventListener('pageshow', handlePageShow);
-
-    // PWA Freeze/Resume Events (iOS)
-    const handleResume = () => {
-      console.log('▶️ PWA resumed, prüfe Transactions Connection...');
-      
-      // Prüfe Channel nach kurzer Verzögerung
-      setTimeout(() => {
-        if (!channelRef || channelRef.state === 'closed') {
-          console.log('🔄 Reconnecting Transactions nach Resume...');
-          setupRealtimeChannel();
-        } else {
-          console.log('✅ Transactions Channel noch aktiv');
-        }
-      }, 1000);
-    };
-    document.addEventListener('resume', handleResume);
-
+    // Cleanup beim Unmount
     return () => {
-      console.log('🧹 Cleanup: Removing transactions channel and intervals');
-      if (channelRef) {
-        unregisterChannel(`transactions-${userId}`);
-        supabase.removeChannel(channelRef);
-        channelRef = null;
+      console.log('🧹 Cleanup: Entferne Transactions-Channel & Timer');
+      isSubscribed = false;
+      
+      if (reconnectTimeoutRef) {
+        clearTimeout(reconnectTimeoutRef);
+        reconnectTimeoutRef = null;
       }
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
+      
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('pageshow', handlePageShow);
-      document.removeEventListener('resume', handleResume);
+      
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
-  }, [userId]);
+  }, [userId, loadTransactions]);
 
   if (loading) {
     return (
@@ -254,8 +227,18 @@ const RecentTransactions = ({ userId }) => {
   return (
     <div className="bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm rounded-xl border border-white/20 dark:border-gray-700/20 shadow-lg transition-colors duration-300">
       <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Neueste Transaktionen</h3>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Deine letzten 5 Transaktionen</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Neueste Transaktionen</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Deine letzten 5 Transaktionen</p>
+          </div>
+          <div className="flex items-center space-x-1">
+            <div className={`h-2 w-2 rounded-full ${isRealtimeConnected ? 'bg-green-500' : 'bg-orange-500'} animate-pulse`}></div>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {isRealtimeConnected ? 'Live' : 'Polling'}
+            </span>
+          </div>
+        </div>
       </div>
       
       <div className="p-6">
@@ -360,4 +343,3 @@ const RecentTransactions = ({ userId }) => {
 };
 
 export default RecentTransactions;
-
