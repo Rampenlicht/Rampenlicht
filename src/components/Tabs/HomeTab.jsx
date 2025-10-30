@@ -65,19 +65,6 @@ const HomeTab = ({ profile }) => {
 
   // ========== BALANCE REALTIME SETUP ==========
   useEffect(() => {
-
-    // Prüfe Supabase Konfiguration
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-
-    if (!supabaseUrl || !supabaseKey || 
-        supabaseUrl.includes('dein-projekt') || 
-        supabaseKey.includes('dein-anon-key')) {
-      setError('Supabase nicht konfiguriert. Bitte .env Datei einrichten.')
-      console.error('❌ Supabase Konfiguration fehlt!')
-      return;
-    }
-
     if (!userId) return;
 
     loadBalance();

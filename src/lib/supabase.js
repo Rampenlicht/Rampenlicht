@@ -5,16 +5,18 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('⚠️ Supabase URL oder Anon Key fehlt. Bitte .env Datei konfigurieren.')
+}else{
+  console.log('✅ Supabase URL und Anon Key konfiguriert.')
 }
 
 // Verbesserte Konfiguration für iOS PWA & Self-hosted
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
   realtime: {
     params: {
-      eventsPerSecond: 10  // Erhöht für bessere Responsiveness
+      eventsPerSecond: 100  // Erhöht für bessere Responsiveness
     },
     timeout: 30000,
-    heartbeatIntervalMs: 15000,  // Kürzere Heartbeats für PWA/iOS
+    heartbeatIntervalMs: 10000,  // Kürzere Heartbeats für PWA/iOS
     
     // Exponential Backoff für Reconnects
     reconnectAfterMs: (tries) => {
