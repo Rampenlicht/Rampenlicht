@@ -24,7 +24,6 @@
   "categories": ["finance", "business"],
   "lang": "de-DE",
   "dir": "ltr",
-  "scope": "/",
-  "prefer_related_applications": false
+  "scope": "/"
 }
 

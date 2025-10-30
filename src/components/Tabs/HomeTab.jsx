@@ -177,6 +177,55 @@ const HomeTab = ({ profile }) => {
 
     setupBalanceChannel();
 
+    // ========== PWA/iOS LIFECYCLE EVENTS ==========
+    
+    // 1. PWA PageShow Event - Wichtig für iOS Back/Forward Cache
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        console.log('🔄 PWA aus Back/Forward Cache (Balance) - Force Reconnect');
+        loadBalance();
+        
+        setTimeout(() => {
+          if (!balanceChannelRef.current || balanceChannelRef.current.state === 'closed') {
+            console.log('🔄 Force Reconnecting Balance nach BFCache...');
+            setupBalanceChannel();
+          }
+        }, 500);
+      }
+    };
+    
+    // 2. PWA Resume Event (iOS-spezifisch)
+    const handleResume = () => {
+      console.log('▶️ PWA resumed (Balance), prüfe Connection...');
+      
+      setTimeout(() => {
+        if (!balanceChannelRef.current || balanceChannelRef.current.state === 'closed') {
+          console.log('🔄 Reconnecting Balance nach Resume...');
+          setupBalanceChannel();
+        } else {
+          console.log('✅ Balance Channel noch aktiv');
+        }
+      }, 1000);
+    };
+    
+    // 3. Visibility Change (Browser & PWA)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👀 App wieder sichtbar (Balance), aktualisiere...');
+        loadBalance();
+        
+        if (balanceChannelRef.current && balanceChannelRef.current.state === 'closed') {
+          console.log('🔄 Reconnecting Balance nach Visibility...');
+          setupBalanceChannel();
+        }
+      }
+    };
+    
+    // Event Listeners registrieren
+    window.addEventListener('pageshow', handlePageShow);
+    document.addEventListener('resume', handleResume);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       console.log('🧹 Cleanup: Entferne Balance-Channel & Timer');
       isSubscribed = false;
@@ -195,6 +244,11 @@ const HomeTab = ({ profile }) => {
         clearInterval(balancePollIntervalRef.current);
         balancePollIntervalRef.current = null;
       }
+      
+      // Event Listeners entfernen
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('resume', handleResume);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [userId, loadBalance]);
 
@@ -347,6 +401,55 @@ const HomeTab = ({ profile }) => {
 
     setupTransactionsChannel();
 
+    // ========== PWA/iOS LIFECYCLE EVENTS ==========
+    
+    // 1. PWA PageShow Event - Wichtig für iOS Back/Forward Cache
+    const handlePageShowTx = (event) => {
+      if (event.persisted) {
+        console.log('🔄 PWA aus Back/Forward Cache (Transactions) - Force Reconnect');
+        loadTransactions();
+        
+        setTimeout(() => {
+          if (!transactionsChannelRef.current || transactionsChannelRef.current.state === 'closed') {
+            console.log('🔄 Force Reconnecting Transactions nach BFCache...');
+            setupTransactionsChannel();
+          }
+        }, 500);
+      }
+    };
+    
+    // 2. PWA Resume Event (iOS-spezifisch)
+    const handleResumeTx = () => {
+      console.log('▶️ PWA resumed (Transactions), prüfe Connection...');
+      
+      setTimeout(() => {
+        if (!transactionsChannelRef.current || transactionsChannelRef.current.state === 'closed') {
+          console.log('🔄 Reconnecting Transactions nach Resume...');
+          setupTransactionsChannel();
+        } else {
+          console.log('✅ Transactions Channel noch aktiv');
+        }
+      }, 1000);
+    };
+    
+    // 3. Visibility Change (Browser & PWA)
+    const handleVisibilityChangeTx = () => {
+      if (!document.hidden) {
+        console.log('👀 App wieder sichtbar (Transactions), aktualisiere...');
+        loadTransactions();
+        
+        if (transactionsChannelRef.current && transactionsChannelRef.current.state === 'closed') {
+          console.log('🔄 Reconnecting Transactions nach Visibility...');
+          setupTransactionsChannel();
+        }
+      }
+    };
+    
+    // Event Listeners registrieren (mit eindeutigen Namen)
+    window.addEventListener('pageshow', handlePageShowTx);
+    document.addEventListener('resume', handleResumeTx);
+    document.addEventListener('visibilitychange', handleVisibilityChangeTx);
+
     return () => {
       console.log('🧹 Cleanup: Entferne Transactions-Channel & Timer');
       isSubscribed = false;
@@ -365,6 +468,11 @@ const HomeTab = ({ profile }) => {
         clearInterval(transactionsPollIntervalRef.current);
         transactionsPollIntervalRef.current = null;
       }
+      
+      // Event Listeners entfernen
+      window.removeEventListener('pageshow', handlePageShowTx);
+      document.removeEventListener('resume', handleResumeTx);
+      document.removeEventListener('visibilitychange', handleVisibilityChangeTx);
     };
   }, [userId, loadTransactions]);
 
