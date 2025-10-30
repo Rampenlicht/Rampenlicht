@@ -43,8 +43,15 @@ export default defineConfig({
         // Runtime Caching für bessere Offline-Funktionalität
         runtimeCaching: [
           {
-            // Supabase API Calls - Network First
-            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            // Supabase REST API Calls (nicht WebSocket!) - Network First
+            urlPattern: ({ url, request }) => {
+              // Nur HTTP/HTTPS Requests cachen, keine WebSocket-Verbindungen
+              const isSupabase = url.hostname.includes('q44cgoc08k8sgcoc4cg4csc4.aromaoase.app');
+              const isHttpRequest = url.protocol === 'http:' || url.protocol === 'https:';
+              const isNotWebSocket = !url.pathname.includes('/realtime/') && 
+                                     request.destination !== 'websocket';
+              return isSupabase && isHttpRequest && isNotWebSocket;
+            },
             handler: 'NetworkFirst',
             options: {
               cacheName: 'supabase-api',
