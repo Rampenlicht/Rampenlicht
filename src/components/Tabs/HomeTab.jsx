@@ -85,8 +85,9 @@ const HomeTab = ({ profile }) => {
       const channel = supabase
         .channel(channelName, {
           config: {
-            broadcast: { self: true },
+            broadcast: { self: false },  // Keine Self-Broadcast nötig
             presence: { key: userId },
+            private: false  // Public channel für bessere Performance
           },
         })
         .on(
@@ -116,35 +117,42 @@ const HomeTab = ({ profile }) => {
             setIsBalanceRealtimeConnected(true);
             console.log('✅ Realtime verbunden (Balance) – kein Polling nötig');
 
+            // Stoppe Fallback-Polling
             if (balancePollIntervalRef.current) {
               clearInterval(balancePollIntervalRef.current);
               balancePollIntervalRef.current = null;
             }
 
+            // Backup-Check alle 2 Minuten (statt 5)
             balancePollIntervalRef.current = setInterval(() => {
               console.log('🔄 Backup-Check (Balance Realtime aktiv)…');
               loadBalance();
-            }, 300000); // 5 Minuten
+            }, 120000); // 2 Minuten
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setIsBalanceRealtimeConnected(false);
             console.warn('⚠️ Realtime Fehler (Balance) – starte Fallback-Polling');
 
+            // Sofort einmal laden
+            loadBalance();
+
+            // Dann Polling alle 3 Sekunden (statt 5)
             if (!balancePollIntervalRef.current) {
               balancePollIntervalRef.current = setInterval(() => {
                 console.log('🔄 Polling Balance (Realtime inaktiv)…');
                 loadBalance();
-              }, 5000);
+              }, 3000);
             }
 
+            // Schnellerer Reconnect (1s statt 3s)
             if (reconnectTimeoutRef) {
               clearTimeout(reconnectTimeoutRef);
             }
             reconnectTimeoutRef = setTimeout(() => {
               console.log('🔄 Versuche Reconnect (Balance)…');
               setupBalanceChannel();
-            }, 3000);
+            }, 1000);
           }
 
           else if (status === 'CLOSED') {
@@ -154,20 +162,25 @@ const HomeTab = ({ profile }) => {
               setIsBalanceRealtimeConnected(false);
               console.warn('⚠️ Balance-Verbindung unerwartet geschlossen – starte Fallback');
 
+              // Sofort einmal laden
+              loadBalance();
+
+              // Polling alle 3 Sekunden
               if (!balancePollIntervalRef.current) {
                 balancePollIntervalRef.current = setInterval(() => {
                   console.log('🔄 Polling Balance (Realtime inaktiv)…');
                   loadBalance();
-                }, 5000);
+                }, 3000);
               }
 
+              // Schneller Reconnect (1s)
               if (reconnectTimeoutRef) {
                 clearTimeout(reconnectTimeoutRef);
               }
               reconnectTimeoutRef = setTimeout(() => {
                 console.log('🔄 Versuche Reconnect nach unerwarteter Trennung (Balance)…');
                 setupBalanceChannel();
-              }, 3000);
+              }, 1000);
             }
           }
         });
@@ -274,8 +287,9 @@ const HomeTab = ({ profile }) => {
       const channel = supabase
         .channel(channelName, {
           config: {
-            broadcast: { self: true },
-            presence: { key: userId }
+            broadcast: { self: false },  // Keine Self-Broadcast nötig
+            presence: { key: userId },
+            private: false  // Public channel für bessere Performance
           }
         })
         .on(
@@ -340,35 +354,42 @@ const HomeTab = ({ profile }) => {
             setIsTransactionsRealtimeConnected(true);
             console.log('✅ Realtime verbunden (Transactions) – kein Polling nötig');
 
+            // Stoppe Fallback-Polling
             if (transactionsPollIntervalRef.current) {
               clearInterval(transactionsPollIntervalRef.current);
               transactionsPollIntervalRef.current = null;
             }
 
+            // Backup-Check alle 2 Minuten (statt 5)
             transactionsPollIntervalRef.current = setInterval(() => {
               console.log('🔄 Backup-Check (Transactions Realtime aktiv)…');
               loadTransactions();
-            }, 300000); // 5 Minuten
+            }, 120000); // 2 Minuten
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setIsTransactionsRealtimeConnected(false);
             console.warn('⚠️ Realtime Fehler (Transactions) – starte Fallback-Polling');
 
+            // Sofort einmal laden
+            loadTransactions();
+
+            // Dann Polling alle 5 Sekunden (statt 10)
             if (!transactionsPollIntervalRef.current) {
               transactionsPollIntervalRef.current = setInterval(() => {
                 console.log('🔄 Polling Transactions (Realtime inaktiv)…');
                 loadTransactions();
-              }, 10000);
+              }, 5000);
             }
 
+            // Schnellerer Reconnect (1s statt 3s)
             if (reconnectTimeoutRef) {
               clearTimeout(reconnectTimeoutRef);
             }
             reconnectTimeoutRef = setTimeout(() => {
               console.log('🔄 Versuche Reconnect (Transactions)…');
               setupTransactionsChannel();
-            }, 3000);
+            }, 1000);
           }
 
           else if (status === 'CLOSED') {
@@ -378,20 +399,25 @@ const HomeTab = ({ profile }) => {
               setIsTransactionsRealtimeConnected(false);
               console.warn('⚠️ Transactions-Verbindung unerwartet geschlossen – starte Fallback');
 
+              // Sofort einmal laden
+              loadTransactions();
+
+              // Polling alle 5 Sekunden
               if (!transactionsPollIntervalRef.current) {
                 transactionsPollIntervalRef.current = setInterval(() => {
                   console.log('🔄 Polling Transactions (Realtime inaktiv)…');
                   loadTransactions();
-                }, 10000);
+                }, 5000);
               }
 
+              // Schneller Reconnect (1s)
               if (reconnectTimeoutRef) {
                 clearTimeout(reconnectTimeoutRef);
               }
               reconnectTimeoutRef = setTimeout(() => {
                 console.log('🔄 Versuche Reconnect nach unerwarteter Trennung (Transactions)…');
                 setupTransactionsChannel();
-              }, 3000);
+              }, 1000);
             }
           }
         });
