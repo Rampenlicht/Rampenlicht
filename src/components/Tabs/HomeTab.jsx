@@ -161,7 +161,7 @@ const HomeTab = ({ profile }) => {
         balanceChannelRef.current = null;
       }
 
-      const channelName = `balance-${userId}-${Date.now()}`;
+      const channelName = `balance-${userId}`;
       console.log(`🔌 Erstelle Balance-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
@@ -273,7 +273,7 @@ const HomeTab = ({ profile }) => {
         transactionsChannelRef.current = null;
       }
 
-      const channelName = `transactions-${userId}-${Date.now()}`;
+      const channelName = `transactions-${userId}`;
       console.log(`🔌 Erstelle Transactions-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
