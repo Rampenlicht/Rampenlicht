@@ -23,10 +23,11 @@ const HomeTab = ({ profile }) => {
   const balancePollIntervalRef = useRef(null);
   const transactionsPollIntervalRef = useRef(null);
   
-  // Flags für erstmaliges Laden
+  // Flags für erstmaliges Laden und Realtime-Initialisierung
   const initialLoadRef = useRef({
     balance: false,
-    transactions: false
+    transactions: false,
+    realtimeInitialized: false
   });
 
   const userId = profile?.id;
@@ -36,16 +37,21 @@ const HomeTab = ({ profile }) => {
     if (!userId) return;
 
     setBalanceLoading(true);
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('balance')
-      .eq('id', userId)
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('balance')
+        .eq('id', userId)
+        .maybeSingle();
 
-    if (data && !error) {
-      setBalance(data.balance);
+      if (data && !error) {
+        setBalance(data.balance);
+      }
+    } catch (error) {
+      console.error('Fehler beim Laden des Balance:', error);
+    } finally {
+      setBalanceLoading(false);
     }
-    setBalanceLoading(false);
   }, [userId]);
 
   // ========== TRANSACTIONS LOGIC ==========
@@ -53,56 +59,91 @@ const HomeTab = ({ profile }) => {
     if (!userId) return;
 
     setTransactionsLoading(true);
-    const { data, error } = await supabase
-      .from('transactions')
-      .select(`
-        *,
-        sender:sender_id (id, name, email),
-        receiver:receiver_id (id, name, email)
-      `)
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      .limit(5);
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select(`
+          *,
+          sender:sender_id (id, name, email),
+          receiver:receiver_id (id, name, email)
+        `)
+        .eq('user_id', userId)
+        .order('timestamp', { ascending: false })
+        .limit(5);
 
-    if (data && !error) {
-      setTransactions(data);
+      if (data && !error) {
+        setTransactions(data);
+      }
+    } catch (error) {
+      console.error('Fehler beim Laden der Transaktionen:', error);
+    } finally {
+      setTransactionsLoading(false);
     }
-    setTransactionsLoading(false);
   }, [userId]);
 
   // ========== INITIAL DATA LOAD ==========
   useEffect(() => {
     if (!userId) return;
 
-    // Führe initiales Laden nur einmal durch
-    if (!initialLoadRef.current.balance) {
-      console.log('🔄 Initiales Balance-Laden...');
-      loadBalance();
-      initialLoadRef.current.balance = true;
-    }
+    const loadInitialData = async () => {
+      console.log('🚀 Starte initiales Laden der Daten...');
+      
+      // Setze Loading-States zurück
+      setTransactionsLoading(true);
+      setBalanceLoading(true);
 
-    if (!initialLoadRef.current.transactions) {
-      console.log('🔄 Initiales Transactions-Laden...');
-      loadTransactions();
-      initialLoadRef.current.transactions = true;
-    }
+      try {
+        // Paralleles Laden von Balance und Transactions
+        await Promise.all([
+          loadBalance(),
+          loadTransactions()
+        ]);
+        
+        console.log('✅ Initiales Laden abgeschlossen');
+        
+        // Markiere initiales Laden als abgeschlossen
+        initialLoadRef.current.balance = true;
+        initialLoadRef.current.transactions = true;
+        
+        // Starte Realtime SOFORT nach erfolgreichem Laden
+        initializeRealtime();
+        
+      } catch (error) {
+        console.error('❌ Fehler beim initialen Laden:', error);
+      }
+    };
+
+    loadInitialData();
   }, [userId, loadBalance, loadTransactions]);
 
-  // ========== BALANCE REALTIME SETUP ==========
-  useEffect(() => {
-    if (!userId || !initialLoadRef.current.balance) return;
+  // ========== REALTIME INITIALIZATION ==========
+  const initializeRealtime = useCallback(() => {
+    if (!userId || initialLoadRef.current.realtimeInitialized) {
+      return;
+    }
+
+    console.log('🎯 Initialisiere Realtime-Connections...');
+    initialLoadRef.current.realtimeInitialized = true;
+
+    // Starte beide Realtime-Connections
+    setupBalanceChannel();
+    setupTransactionsChannel();
+  }, [userId]);
+
+  // ========== BALANCE CHANNEL SETUP ==========
+  const setupBalanceChannel = useCallback(() => {
+    if (!userId || balanceChannelRef.current) return;
 
     let isSubscribed = false;
     let reconnectTimeoutRef = null;
 
-    const setupBalanceChannel = () => {
+    const setupChannel = () => {
       if (balanceChannelRef.current) {
-        console.log('🧹 Entferne alten Balance-Channel...');
         supabase.removeChannel(balanceChannelRef.current);
         balanceChannelRef.current = null;
       }
 
-      const channelName = `balance-${userId}`;
+      const channelName = `balance-${userId}-${Date.now()}`;
       console.log(`🔌 Erstelle Balance-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
@@ -110,7 +151,10 @@ const HomeTab = ({ profile }) => {
           config: {
             broadcast: { self: false },
             presence: { key: userId },
-            private: false
+            private: false,
+            // Wichtig für zuverlässige Verbindungen
+            reconnect: true,
+            timeout: 10000
           },
         })
         .on(
@@ -128,7 +172,7 @@ const HomeTab = ({ profile }) => {
             }
           }
         )
-        .subscribe((status, err) => {
+        .subscribe(async (status, err) => {
           console.log('📡 Realtime Status (Balance):', status);
 
           if (err) {
@@ -171,7 +215,7 @@ const HomeTab = ({ profile }) => {
             }
             reconnectTimeoutRef = setTimeout(() => {
               console.log('🔄 Versuche Reconnect (Balance)…');
-              setupBalanceChannel();
+              setupChannel();
             }, 1000);
           }
 
@@ -196,7 +240,7 @@ const HomeTab = ({ profile }) => {
               }
               reconnectTimeoutRef = setTimeout(() => {
                 console.log('🔄 Versuche Reconnect nach unerwarteter Trennung (Balance)…');
-                setupBalanceChannel();
+                setupChannel();
               }, 1000);
             }
           }
@@ -205,94 +249,23 @@ const HomeTab = ({ profile }) => {
       balanceChannelRef.current = channel;
     };
 
-    // Starte Realtime nur nach initialem Laden
-    setupBalanceChannel();
-
-    // ========== PWA/iOS LIFECYCLE EVENTS ==========
-    
-    const handlePageShow = (event) => {
-      if (event.persisted) {
-        console.log('🔄 PWA aus Back/Forward Cache (Balance) - Force Reconnect');
-        loadBalance();
-        
-        setTimeout(() => {
-          if (!balanceChannelRef.current || balanceChannelRef.current.state === 'closed') {
-            console.log('🔄 Force Reconnecting Balance nach BFCache...');
-            setupBalanceChannel();
-          }
-        }, 500);
-      }
-    };
-    
-    const handleResume = () => {
-      console.log('▶️ PWA resumed (Balance), prüfe Connection...');
-      
-      setTimeout(() => {
-        if (!balanceChannelRef.current || balanceChannelRef.current.state === 'closed') {
-          console.log('🔄 Reconnecting Balance nach Resume...');
-          setupBalanceChannel();
-        } else {
-          console.log('✅ Balance Channel noch aktiv');
-        }
-      }, 1000);
-    };
-    
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('👀 App wieder sichtbar (Balance), aktualisiere...');
-        loadBalance();
-        
-        if (balanceChannelRef.current && balanceChannelRef.current.state === 'closed') {
-          console.log('🔄 Reconnecting Balance nach Visibility...');
-          setupBalanceChannel();
-        }
-      }
-    };
-    
-    window.addEventListener('pageshow', handlePageShow);
-    document.addEventListener('resume', handleResume);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      console.log('🧹 Cleanup: Entferne Balance-Channel & Timer');
-      isSubscribed = false;
-      
-      if (reconnectTimeoutRef) {
-        clearTimeout(reconnectTimeoutRef);
-        reconnectTimeoutRef = null;
-      }
-      
-      if (balanceChannelRef.current) {
-        supabase.removeChannel(balanceChannelRef.current);
-        balanceChannelRef.current = null;
-      }
-      
-      if (balancePollIntervalRef.current) {
-        clearInterval(balancePollIntervalRef.current);
-        balancePollIntervalRef.current = null;
-      }
-      
-      window.removeEventListener('pageshow', handlePageShow);
-      document.removeEventListener('resume', handleResume);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
+    setupChannel();
   }, [userId, loadBalance]);
 
-  // ========== TRANSACTIONS REALTIME SETUP ==========
-  useEffect(() => {
-    if (!userId || !initialLoadRef.current.transactions) return;
+  // ========== TRANSACTIONS CHANNEL SETUP ==========
+  const setupTransactionsChannel = useCallback(() => {
+    if (!userId || transactionsChannelRef.current) return;
 
     let isSubscribed = false;
     let reconnectTimeoutRef = null;
 
-    const setupTransactionsChannel = () => {
+    const setupChannel = () => {
       if (transactionsChannelRef.current) {
-        console.log('🧹 Entferne alten Transactions-Channel...');
         supabase.removeChannel(transactionsChannelRef.current);
         transactionsChannelRef.current = null;
       }
 
-      const channelName = `transactions-${userId}`;
+      const channelName = `transactions-${userId}-${Date.now()}`;
       console.log(`🔌 Erstelle Transactions-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
@@ -300,7 +273,9 @@ const HomeTab = ({ profile }) => {
           config: {
             broadcast: { self: false },
             presence: { key: userId },
-            private: false
+            private: false,
+            reconnect: true,
+            timeout: 10000
           }
         })
         .on(
@@ -396,7 +371,7 @@ const HomeTab = ({ profile }) => {
             }
             reconnectTimeoutRef = setTimeout(() => {
               console.log('🔄 Versuche Reconnect (Transactions)…');
-              setupTransactionsChannel();
+              setupChannel();
             }, 1000);
           }
 
@@ -421,7 +396,7 @@ const HomeTab = ({ profile }) => {
               }
               reconnectTimeoutRef = setTimeout(() => {
                 console.log('🔄 Versuche Reconnect nach unerwarteter Trennung (Transactions)…');
-                setupTransactionsChannel();
+                setupChannel();
               }, 1000);
             }
           }
@@ -430,78 +405,69 @@ const HomeTab = ({ profile }) => {
       transactionsChannelRef.current = channel;
     };
 
-    // Starte Realtime nur nach initialem Laden
-    setupTransactionsChannel();
+    setupChannel();
+  }, [userId, loadTransactions]);
 
-    // ========== PWA/iOS LIFECYCLE EVENTS ==========
-    
-    const handlePageShowTx = (event) => {
-      if (event.persisted) {
-        console.log('🔄 PWA aus Back/Forward Cache (Transactions) - Force Reconnect');
-        loadTransactions();
-        
-        setTimeout(() => {
-          if (!transactionsChannelRef.current || transactionsChannelRef.current.state === 'closed') {
-            console.log('🔄 Force Reconnecting Transactions nach BFCache...');
-            setupTransactionsChannel();
-          }
-        }, 500);
-      }
-    };
-    
-    const handleResumeTx = () => {
-      console.log('▶️ PWA resumed (Transactions), prüfe Connection...');
-      
-      setTimeout(() => {
-        if (!transactionsChannelRef.current || transactionsChannelRef.current.state === 'closed') {
-          console.log('🔄 Reconnecting Transactions nach Resume...');
-          setupTransactionsChannel();
-        } else {
-          console.log('✅ Transactions Channel noch aktiv');
-        }
-      }, 1000);
-    };
-    
-    const handleVisibilityChangeTx = () => {
-      if (!document.hidden) {
-        console.log('👀 App wieder sichtbar (Transactions), aktualisiere...');
-        loadTransactions();
-        
-        if (transactionsChannelRef.current && transactionsChannelRef.current.state === 'closed') {
-          console.log('🔄 Reconnecting Transactions nach Visibility...');
-          setupTransactionsChannel();
-        }
-      }
-    };
-    
-    window.addEventListener('pageshow', handlePageShowTx);
-    document.addEventListener('resume', handleResumeTx);
-    document.addEventListener('visibilitychange', handleVisibilityChangeTx);
-
+  // ========== CLEANUP ==========
+  useEffect(() => {
     return () => {
-      console.log('🧹 Cleanup: Entferne Transactions-Channel & Timer');
-      isSubscribed = false;
+      console.log('🧹 Global Cleanup: Entferne alle Channels & Timer');
       
-      if (reconnectTimeoutRef) {
-        clearTimeout(reconnectTimeoutRef);
-        reconnectTimeoutRef = null;
+      // Balance Cleanup
+      if (balanceChannelRef.current) {
+        supabase.removeChannel(balanceChannelRef.current);
+        balanceChannelRef.current = null;
+      }
+      if (balancePollIntervalRef.current) {
+        clearInterval(balancePollIntervalRef.current);
+        balancePollIntervalRef.current = null;
       }
       
+      // Transactions Cleanup
       if (transactionsChannelRef.current) {
         supabase.removeChannel(transactionsChannelRef.current);
         transactionsChannelRef.current = null;
       }
-      
       if (transactionsPollIntervalRef.current) {
         clearInterval(transactionsPollIntervalRef.current);
         transactionsPollIntervalRef.current = null;
       }
       
-      window.removeEventListener('pageshow', handlePageShowTx);
-      document.removeEventListener('resume', handleResumeTx);
-      document.removeEventListener('visibilitychange', handleVisibilityChangeTx);
+      // Reset Flags
+      initialLoadRef.current.realtimeInitialized = false;
     };
-  }, [userId, loadTransactions]);
+  }, []);
+
+  // ========== PWA VISIBILITY HANDLING ==========
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👀 App wieder sichtbar, prüfe Realtime-Connections...');
+        
+        // Prüfe Balance Connection
+        if (balanceChannelRef.current && balanceChannelRef.current.state !== 'subscribed') {
+          console.log('🔄 Reconnecting Balance nach Visibility Change...');
+          setupBalanceChannel();
+        }
+        
+        // Prüfe Transactions Connection
+        if (transactionsChannelRef.current && transactionsChannelRef.current.state !== 'subscribed') {
+          console.log('🔄 Reconnecting Transactions nach Visibility Change...');
+          setupTransactionsChannel();
+        }
+        
+        // Aktualisiere Daten
+        loadBalance();
+        loadTransactions();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [setupBalanceChannel, setupTransactionsChannel, loadBalance, loadTransactions]);
 
   return (
     <div className="space-y-6">
