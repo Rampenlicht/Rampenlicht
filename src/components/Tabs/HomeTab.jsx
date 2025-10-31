@@ -37,11 +37,14 @@ const HomeTab = ({ profile }) => {
     }
   });
 
+  // Cleanup-Flag um zu verhindern, dass nach Cleanup noch Callbacks ausgeführt werden
+  const isMountedRef = useRef(true);
+
   const userId = profile?.id;
 
   // ========== BALANCE LOGIC ==========
   const loadBalance = useCallback(async () => {
-    if (!userId) return;
+    if (!userId || !isMountedRef.current) return;
 
     setBalanceLoading(true);
     try {
@@ -51,19 +54,21 @@ const HomeTab = ({ profile }) => {
         .eq('id', userId)
         .maybeSingle();
 
-      if (data && !error) {
+      if (data && !error && isMountedRef.current) {
         setBalance(data.balance);
       }
     } catch (error) {
       console.error('Fehler beim Laden des Balance:', error);
     } finally {
-      setBalanceLoading(false);
+      if (isMountedRef.current) {
+        setBalanceLoading(false);
+      }
     }
   }, [userId]);
 
   // ========== TRANSACTIONS LOGIC ==========
   const loadTransactions = useCallback(async () => {
-    if (!userId) return;
+    if (!userId || !isMountedRef.current) return;
 
     setTransactionsLoading(true);
     try {
@@ -78,20 +83,22 @@ const HomeTab = ({ profile }) => {
         .order('timestamp', { ascending: false })
         .limit(5);
 
-      if (data && !error) {
+      if (data && !error && isMountedRef.current) {
         setTransactions(data);
       }
     } catch (error) {
       console.error('Fehler beim Laden der Transaktionen:', error);
     } finally {
-      setTransactionsLoading(false);
+      if (isMountedRef.current) {
+        setTransactionsLoading(false);
+      }
     }
   }, [userId]);
 
   // ========== START POLLING ==========
   const startBalancePolling = useCallback(() => {
-    if (balancePollIntervalRef.current) {
-      return; // Polling läuft bereits
+    if (balancePollIntervalRef.current || !isMountedRef.current) {
+      return;
     }
 
     console.log('🔄 Starte Balance-Polling (Realtime fehlgeschlagen)...');
@@ -102,14 +109,16 @@ const HomeTab = ({ profile }) => {
 
     // Dann regelmäßiges Polling
     balancePollIntervalRef.current = setInterval(() => {
-      console.log('🔄 Polling Balance...');
-      loadBalance();
+      if (isMountedRef.current) {
+        console.log('🔄 Polling Balance...');
+        loadBalance();
+      }
     }, 3000);
   }, [loadBalance]);
 
   const startTransactionsPolling = useCallback(() => {
-    if (transactionsPollIntervalRef.current) {
-      return; // Polling läuft bereits
+    if (transactionsPollIntervalRef.current || !isMountedRef.current) {
+      return;
     }
 
     console.log('🔄 Starte Transactions-Polling (Realtime fehlgeschlagen)...');
@@ -120,8 +129,10 @@ const HomeTab = ({ profile }) => {
 
     // Dann regelmäßiges Polling
     transactionsPollIntervalRef.current = setInterval(() => {
-      console.log('🔄 Polling Transactions...');
-      loadTransactions();
+      if (isMountedRef.current) {
+        console.log('🔄 Polling Transactions...');
+        loadTransactions();
+      }
     }, 5000);
   }, [loadTransactions]);
 
@@ -144,9 +155,28 @@ const HomeTab = ({ profile }) => {
     }
   }, []);
 
+  // ========== CLEANUP CHANNELS ==========
+  const cleanupBalanceChannel = useCallback(() => {
+    if (balanceChannelRef.current) {
+      console.log('🧹 Entferne Balance-Channel');
+      supabase.removeChannel(balanceChannelRef.current);
+      balanceChannelRef.current = null;
+    }
+    setIsBalanceRealtimeConnected(false);
+  }, []);
+
+  const cleanupTransactionsChannel = useCallback(() => {
+    if (transactionsChannelRef.current) {
+      console.log('🧹 Entferne Transactions-Channel');
+      supabase.removeChannel(transactionsChannelRef.current);
+      transactionsChannelRef.current = null;
+    }
+    setIsTransactionsRealtimeConnected(false);
+  }, []);
+
   // ========== BALANCE CHANNEL SETUP ==========
   const setupBalanceChannel = useCallback(() => {
-    if (!userId || balanceChannelRef.current) return;
+    if (!userId || balanceChannelRef.current || !isMountedRef.current) return;
 
     console.log('🎯 Versuche Balance-Realtime-Verbindung...');
     connectionAttemptsRef.current.balance.attempted = true;
@@ -156,9 +186,9 @@ const HomeTab = ({ profile }) => {
     stopBalancePolling();
 
     const setupChannel = () => {
+      // Cleanup vor neuen Versuch
       if (balanceChannelRef.current) {
-        supabase.removeChannel(balanceChannelRef.current);
-        balanceChannelRef.current = null;
+        cleanupBalanceChannel();
       }
 
       const channelName = `balance-${userId}`;
@@ -183,6 +213,7 @@ const HomeTab = ({ profile }) => {
             filter: `id=eq.${userId}`,
           },
           (payload) => {
+            if (!isMountedRef.current) return;
             console.log('✅ Balance Realtime Update:', payload);
             if (payload.new?.balance !== undefined) {
               setBalance(payload.new.balance);
@@ -190,6 +221,8 @@ const HomeTab = ({ profile }) => {
           }
         )
         .subscribe(async (status, err) => {
+          if (!isMountedRef.current) return;
+
           console.log('📡 Realtime Status (Balance):', status);
 
           if (err) {
@@ -202,15 +235,6 @@ const HomeTab = ({ profile }) => {
 
             // Stoppe Polling falls aktiv
             stopBalancePolling();
-
-            // Backup-Check alle 2 Minuten (nur für zusätzliche Sicherheit)
-            if (balancePollIntervalRef.current) {
-              clearInterval(balancePollIntervalRef.current);
-            }
-            balancePollIntervalRef.current = setInterval(() => {
-              console.log('🔄 Backup-Check (Balance Realtime aktiv)…');
-              loadBalance();
-            }, 120000);
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -218,17 +242,9 @@ const HomeTab = ({ profile }) => {
             console.warn('⚠️ Realtime Fehler (Balance) - Channel konnte nicht verbinden');
             
             // Starte Polling NUR wenn Channel-Verbindung fehlschlägt
-            if (!balancePollIntervalRef.current) {
+            if (!balancePollIntervalRef.current && isMountedRef.current) {
               startBalancePolling();
             }
-
-            // Automatischer Reconnect nach 3 Sekunden
-            setTimeout(() => {
-              if (balanceChannelRef.current?.state !== 'subscribed') {
-                console.log('🔄 Automatischer Reconnect-Versuch (Balance)...');
-                setupChannel();
-              }
-            }, 3000);
           }
 
           else if (status === 'CLOSED') {
@@ -236,17 +252,11 @@ const HomeTab = ({ profile }) => {
             setIsBalanceRealtimeConnected(false);
             
             // Starte Polling NUR wenn die Verbindung unerwartet geschlossen wird
-            // und wir vorher erfolgreich verbunden waren
-            if (!balancePollIntervalRef.current) {
+            // und wir noch mounted sind
+            if (!balancePollIntervalRef.current && isMountedRef.current) {
               console.log('🔄 Balance-Verbindung verloren - starte Polling');
               startBalancePolling();
             }
-
-            // Schneller Reconnect-Versuch
-            setTimeout(() => {
-              console.log('🔄 Reconnect nach unerwarteter Trennung (Balance)…');
-              setupChannel();
-            }, 1000);
           }
         });
 
@@ -254,11 +264,11 @@ const HomeTab = ({ profile }) => {
     };
 
     setupChannel();
-  }, [userId, loadBalance, startBalancePolling, stopBalancePolling]);
+  }, [userId, loadBalance, startBalancePolling, stopBalancePolling, cleanupBalanceChannel]);
 
   // ========== TRANSACTIONS CHANNEL SETUP ==========
   const setupTransactionsChannel = useCallback(() => {
-    if (!userId || transactionsChannelRef.current) return;
+    if (!userId || transactionsChannelRef.current || !isMountedRef.current) return;
 
     console.log('🎯 Versuche Transactions-Realtime-Verbindung...');
     connectionAttemptsRef.current.transactions.attempted = true;
@@ -268,9 +278,9 @@ const HomeTab = ({ profile }) => {
     stopTransactionsPolling();
 
     const setupChannel = () => {
+      // Cleanup vor neuen Versuch
       if (transactionsChannelRef.current) {
-        supabase.removeChannel(transactionsChannelRef.current);
-        transactionsChannelRef.current = null;
+        cleanupTransactionsChannel();
       }
 
       const channelName = `transactions-${userId}`;
@@ -295,16 +305,19 @@ const HomeTab = ({ profile }) => {
             filter: `user_id=eq.${userId}`,
           },
           (payload) => {
+            if (!isMountedRef.current) return;
             console.log('✅ Neue Transaktion erhalten:', payload);
             setTransactions((prev) => [payload.new, ...prev].slice(0, 5));
             setNewTransactionIds((prev) => new Set(prev).add(payload.new.id));
             
             setTimeout(() => {
-              setNewTransactionIds((prev) => {
-                const next = new Set(prev);
-                next.delete(payload.new.id);
-                return next;
-              });
+              if (isMountedRef.current) {
+                setNewTransactionIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(payload.new.id);
+                  return next;
+                });
+              }
             }, 3000);
           }
         )
@@ -317,6 +330,7 @@ const HomeTab = ({ profile }) => {
             filter: `user_id=eq.${userId}`,
           },
           (payload) => {
+            if (!isMountedRef.current) return;
             console.log('🔄 Transaktion aktualisiert:', payload);
             setTransactions((prev) =>
               prev.map((t) => (t.id === payload.new.id ? payload.new : t))
@@ -332,11 +346,14 @@ const HomeTab = ({ profile }) => {
             filter: `user_id=eq.${userId}`,
           },
           (payload) => {
+            if (!isMountedRef.current) return;
             console.log('🗑️ Transaktion gelöscht:', payload);
             setTransactions((prev) => prev.filter((t) => t.id !== payload.old.id));
           }
         )
         .subscribe((status, err) => {
+          if (!isMountedRef.current) return;
+
           console.log('📡 Realtime Status (Transactions):', status);
 
           if (err) {
@@ -349,15 +366,6 @@ const HomeTab = ({ profile }) => {
 
             // Stoppe Polling falls aktiv
             stopTransactionsPolling();
-
-            // Backup-Check alle 2 Minuten
-            if (transactionsPollIntervalRef.current) {
-              clearInterval(transactionsPollIntervalRef.current);
-            }
-            transactionsPollIntervalRef.current = setInterval(() => {
-              console.log('🔄 Backup-Check (Transactions Realtime aktiv)…');
-              loadTransactions();
-            }, 120000);
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -365,17 +373,9 @@ const HomeTab = ({ profile }) => {
             console.warn('⚠️ Realtime Fehler (Transactions) - Channel konnte nicht verbinden');
             
             // Starte Polling NUR wenn Channel-Verbindung fehlschlägt
-            if (!transactionsPollIntervalRef.current) {
+            if (!transactionsPollIntervalRef.current && isMountedRef.current) {
               startTransactionsPolling();
             }
-
-            // Automatischer Reconnect nach 3 Sekunden
-            setTimeout(() => {
-              if (transactionsChannelRef.current?.state !== 'subscribed') {
-                console.log('🔄 Automatischer Reconnect-Versuch (Transactions)...');
-                setupChannel();
-              }
-            }, 3000);
           }
 
           else if (status === 'CLOSED') {
@@ -383,16 +383,10 @@ const HomeTab = ({ profile }) => {
             setIsTransactionsRealtimeConnected(false);
             
             // Starte Polling NUR wenn die Verbindung unerwartet geschlossen wird
-            if (!transactionsPollIntervalRef.current) {
+            if (!transactionsPollIntervalRef.current && isMountedRef.current) {
               console.log('🔄 Transactions-Verbindung verloren - starte Polling');
               startTransactionsPolling();
             }
-
-            // Schneller Reconnect-Versuch
-            setTimeout(() => {
-              console.log('🔄 Reconnect nach unerwarteter Trennung (Transactions)…');
-              setupChannel();
-            }, 1000);
           }
         });
 
@@ -400,11 +394,13 @@ const HomeTab = ({ profile }) => {
     };
 
     setupChannel();
-  }, [userId, loadTransactions, startTransactionsPolling, stopTransactionsPolling]);
+  }, [userId, loadTransactions, startTransactionsPolling, stopTransactionsPolling, cleanupTransactionsChannel]);
 
   // ========== INITIAL DATA LOAD & REALTIME SETUP ==========
   useEffect(() => {
     if (!userId) return;
+
+    isMountedRef.current = true;
 
     const loadInitialData = async () => {
       console.log('🚀 Starte initiales Laden der Daten...');
@@ -419,6 +415,8 @@ const HomeTab = ({ profile }) => {
           loadTransactions()
         ]);
         
+        if (!isMountedRef.current) return;
+        
         console.log('✅ Initiales Laden abgeschlossen');
         
         // STARTE REALTIME VERSUCH NACH ERFOLGREICHEM LADEN
@@ -428,6 +426,8 @@ const HomeTab = ({ profile }) => {
         
       } catch (error) {
         console.error('❌ Fehler beim initialen Laden:', error);
+        
+        if (!isMountedRef.current) return;
         
         // Falls initiales Laden fehlschlägt, starte Polling als Fallback
         if (!balancePollIntervalRef.current) {
@@ -440,34 +440,16 @@ const HomeTab = ({ profile }) => {
     };
 
     loadInitialData();
-  }, [
-    userId, 
-    loadBalance, 
-    loadTransactions, 
-    setupBalanceChannel, 
-    setupTransactionsChannel,
-    startBalancePolling,
-    startTransactionsPolling
-  ]);
 
-  // ========== CLEANUP ==========
-  useEffect(() => {
+    // Cleanup beim Verlassen der Komponente
     return () => {
-      console.log('🧹 Global Cleanup: Entferne alle Channels & Timer');
+      console.log('🧹 Komponenten-Cleanup: Stopping alles...');
+      isMountedRef.current = false;
       
-      // Balance Cleanup
-      if (balanceChannelRef.current) {
-        supabase.removeChannel(balanceChannelRef.current);
-        balanceChannelRef.current = null;
-      }
       stopBalancePolling();
-      
-      // Transactions Cleanup
-      if (transactionsChannelRef.current) {
-        supabase.removeChannel(transactionsChannelRef.current);
-        transactionsChannelRef.current = null;
-      }
       stopTransactionsPolling();
+      cleanupBalanceChannel();
+      cleanupTransactionsChannel();
       
       // Reset Flags
       connectionAttemptsRef.current = {
@@ -475,7 +457,19 @@ const HomeTab = ({ profile }) => {
         transactions: { attempted: false, failed: false, attempts: 0 }
       };
     };
-  }, [stopBalancePolling, stopTransactionsPolling]);
+  }, [
+    userId, 
+    loadBalance, 
+    loadTransactions, 
+    setupBalanceChannel, 
+    setupTransactionsChannel,
+    startBalancePolling,
+    startTransactionsPolling,
+    stopBalancePolling,
+    stopTransactionsPolling,
+    cleanupBalanceChannel,
+    cleanupTransactionsChannel
+  ]);
 
   return (
     <div className="space-y-6">
