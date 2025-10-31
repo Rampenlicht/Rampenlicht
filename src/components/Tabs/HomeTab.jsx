@@ -22,6 +22,12 @@ const HomeTab = ({ profile }) => {
   const transactionsChannelRef = useRef(null);
   const balancePollIntervalRef = useRef(null);
   const transactionsPollIntervalRef = useRef(null);
+  
+  // Flags für erstmaliges Laden
+  const initialLoadRef = useRef({
+    balance: false,
+    transactions: false
+  });
 
   const userId = profile?.id;
 
@@ -46,6 +52,7 @@ const HomeTab = ({ profile }) => {
   const loadTransactions = useCallback(async () => {
     if (!userId) return;
 
+    setTransactionsLoading(true);
     const { data, error } = await supabase
       .from('transactions')
       .select(`
@@ -63,11 +70,27 @@ const HomeTab = ({ profile }) => {
     setTransactionsLoading(false);
   }, [userId]);
 
-  // ========== BALANCE REALTIME SETUP ==========
+  // ========== INITIAL DATA LOAD ==========
   useEffect(() => {
     if (!userId) return;
 
-    loadBalance();
+    // Führe initiales Laden nur einmal durch
+    if (!initialLoadRef.current.balance) {
+      console.log('🔄 Initiales Balance-Laden...');
+      loadBalance();
+      initialLoadRef.current.balance = true;
+    }
+
+    if (!initialLoadRef.current.transactions) {
+      console.log('🔄 Initiales Transactions-Laden...');
+      loadTransactions();
+      initialLoadRef.current.transactions = true;
+    }
+  }, [userId, loadBalance, loadTransactions]);
+
+  // ========== BALANCE REALTIME SETUP ==========
+  useEffect(() => {
+    if (!userId || !initialLoadRef.current.balance) return;
 
     let isSubscribed = false;
     let reconnectTimeoutRef = null;
@@ -80,14 +103,14 @@ const HomeTab = ({ profile }) => {
       }
 
       const channelName = `balance-${userId}`;
-      console.log(`🔌 Erstelle neuen Balance-Channel: ${channelName}`);
+      console.log(`🔌 Erstelle Balance-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
         .channel(channelName, {
           config: {
-            broadcast: { self: false },  // Keine Self-Broadcast nötig
+            broadcast: { self: false },
             presence: { key: userId },
-            private: false  // Public channel für bessere Performance
+            private: false
           },
         })
         .on(
@@ -115,7 +138,7 @@ const HomeTab = ({ profile }) => {
           if (status === 'SUBSCRIBED') {
             isSubscribed = true;
             setIsBalanceRealtimeConnected(true);
-            console.log('✅ Realtime verbunden (Balance) – kein Polling nötig');
+            console.log('✅ Realtime verbunden (Balance)');
 
             // Stoppe Fallback-Polling
             if (balancePollIntervalRef.current) {
@@ -123,21 +146,18 @@ const HomeTab = ({ profile }) => {
               balancePollIntervalRef.current = null;
             }
 
-            // Backup-Check alle 2 Minuten (statt 5)
+            // Backup-Check alle 2 Minuten
             balancePollIntervalRef.current = setInterval(() => {
               console.log('🔄 Backup-Check (Balance Realtime aktiv)…');
               loadBalance();
-            }, 120000); // 2 Minuten
+            }, 120000);
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setIsBalanceRealtimeConnected(false);
             console.warn('⚠️ Realtime Fehler (Balance) – starte Fallback-Polling');
 
-            // Sofort einmal laden
-            loadBalance();
-
-            // Dann Polling alle 3 Sekunden (statt 5)
+            // Polling alle 3 Sekunden
             if (!balancePollIntervalRef.current) {
               balancePollIntervalRef.current = setInterval(() => {
                 console.log('🔄 Polling Balance (Realtime inaktiv)…');
@@ -145,7 +165,7 @@ const HomeTab = ({ profile }) => {
               }, 3000);
             }
 
-            // Schnellerer Reconnect (1s statt 3s)
+            // Schnellerer Reconnect (1s)
             if (reconnectTimeoutRef) {
               clearTimeout(reconnectTimeoutRef);
             }
@@ -161,9 +181,6 @@ const HomeTab = ({ profile }) => {
             if (isSubscribed) {
               setIsBalanceRealtimeConnected(false);
               console.warn('⚠️ Balance-Verbindung unerwartet geschlossen – starte Fallback');
-
-              // Sofort einmal laden
-              loadBalance();
 
               // Polling alle 3 Sekunden
               if (!balancePollIntervalRef.current) {
@@ -188,11 +205,11 @@ const HomeTab = ({ profile }) => {
       balanceChannelRef.current = channel;
     };
 
+    // Starte Realtime nur nach initialem Laden
     setupBalanceChannel();
 
     // ========== PWA/iOS LIFECYCLE EVENTS ==========
     
-    // 1. PWA PageShow Event - Wichtig für iOS Back/Forward Cache
     const handlePageShow = (event) => {
       if (event.persisted) {
         console.log('🔄 PWA aus Back/Forward Cache (Balance) - Force Reconnect');
@@ -207,7 +224,6 @@ const HomeTab = ({ profile }) => {
       }
     };
     
-    // 2. PWA Resume Event (iOS-spezifisch)
     const handleResume = () => {
       console.log('▶️ PWA resumed (Balance), prüfe Connection...');
       
@@ -221,7 +237,6 @@ const HomeTab = ({ profile }) => {
       }, 1000);
     };
     
-    // 3. Visibility Change (Browser & PWA)
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         console.log('👀 App wieder sichtbar (Balance), aktualisiere...');
@@ -234,7 +249,6 @@ const HomeTab = ({ profile }) => {
       }
     };
     
-    // Event Listeners registrieren
     window.addEventListener('pageshow', handlePageShow);
     document.addEventListener('resume', handleResume);
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -258,7 +272,6 @@ const HomeTab = ({ profile }) => {
         balancePollIntervalRef.current = null;
       }
       
-      // Event Listeners entfernen
       window.removeEventListener('pageshow', handlePageShow);
       document.removeEventListener('resume', handleResume);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -267,9 +280,7 @@ const HomeTab = ({ profile }) => {
 
   // ========== TRANSACTIONS REALTIME SETUP ==========
   useEffect(() => {
-    if (!userId) return;
-
-    loadTransactions();
+    if (!userId || !initialLoadRef.current.transactions) return;
 
     let isSubscribed = false;
     let reconnectTimeoutRef = null;
@@ -282,14 +293,14 @@ const HomeTab = ({ profile }) => {
       }
 
       const channelName = `transactions-${userId}`;
-      console.log(`🔌 Erstelle neuen Transactions-Channel: ${channelName}`);
+      console.log(`🔌 Erstelle Transactions-Realtime-Channel: ${channelName}`);
 
       const channel = supabase
         .channel(channelName, {
           config: {
-            broadcast: { self: false },  // Keine Self-Broadcast nötig
+            broadcast: { self: false },
             presence: { key: userId },
-            private: false  // Public channel für bessere Performance
+            private: false
           }
         })
         .on(
@@ -352,7 +363,7 @@ const HomeTab = ({ profile }) => {
           if (status === 'SUBSCRIBED') {
             isSubscribed = true;
             setIsTransactionsRealtimeConnected(true);
-            console.log('✅ Realtime verbunden (Transactions) – kein Polling nötig');
+            console.log('✅ Realtime verbunden (Transactions)');
 
             // Stoppe Fallback-Polling
             if (transactionsPollIntervalRef.current) {
@@ -360,21 +371,18 @@ const HomeTab = ({ profile }) => {
               transactionsPollIntervalRef.current = null;
             }
 
-            // Backup-Check alle 2 Minuten (statt 5)
+            // Backup-Check alle 2 Minuten
             transactionsPollIntervalRef.current = setInterval(() => {
               console.log('🔄 Backup-Check (Transactions Realtime aktiv)…');
               loadTransactions();
-            }, 120000); // 2 Minuten
+            }, 120000);
           }
 
           else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setIsTransactionsRealtimeConnected(false);
             console.warn('⚠️ Realtime Fehler (Transactions) – starte Fallback-Polling');
 
-            // Sofort einmal laden
-            loadTransactions();
-
-            // Dann Polling alle 5 Sekunden (statt 10)
+            // Polling alle 5 Sekunden
             if (!transactionsPollIntervalRef.current) {
               transactionsPollIntervalRef.current = setInterval(() => {
                 console.log('🔄 Polling Transactions (Realtime inaktiv)…');
@@ -382,7 +390,7 @@ const HomeTab = ({ profile }) => {
               }, 5000);
             }
 
-            // Schnellerer Reconnect (1s statt 3s)
+            // Schnellerer Reconnect (1s)
             if (reconnectTimeoutRef) {
               clearTimeout(reconnectTimeoutRef);
             }
@@ -398,9 +406,6 @@ const HomeTab = ({ profile }) => {
             if (isSubscribed) {
               setIsTransactionsRealtimeConnected(false);
               console.warn('⚠️ Transactions-Verbindung unerwartet geschlossen – starte Fallback');
-
-              // Sofort einmal laden
-              loadTransactions();
 
               // Polling alle 5 Sekunden
               if (!transactionsPollIntervalRef.current) {
@@ -425,11 +430,11 @@ const HomeTab = ({ profile }) => {
       transactionsChannelRef.current = channel;
     };
 
+    // Starte Realtime nur nach initialem Laden
     setupTransactionsChannel();
 
     // ========== PWA/iOS LIFECYCLE EVENTS ==========
     
-    // 1. PWA PageShow Event - Wichtig für iOS Back/Forward Cache
     const handlePageShowTx = (event) => {
       if (event.persisted) {
         console.log('🔄 PWA aus Back/Forward Cache (Transactions) - Force Reconnect');
@@ -444,7 +449,6 @@ const HomeTab = ({ profile }) => {
       }
     };
     
-    // 2. PWA Resume Event (iOS-spezifisch)
     const handleResumeTx = () => {
       console.log('▶️ PWA resumed (Transactions), prüfe Connection...');
       
@@ -458,7 +462,6 @@ const HomeTab = ({ profile }) => {
       }, 1000);
     };
     
-    // 3. Visibility Change (Browser & PWA)
     const handleVisibilityChangeTx = () => {
       if (!document.hidden) {
         console.log('👀 App wieder sichtbar (Transactions), aktualisiere...');
@@ -471,7 +474,6 @@ const HomeTab = ({ profile }) => {
       }
     };
     
-    // Event Listeners registrieren (mit eindeutigen Namen)
     window.addEventListener('pageshow', handlePageShowTx);
     document.addEventListener('resume', handleResumeTx);
     document.addEventListener('visibilitychange', handleVisibilityChangeTx);
@@ -495,7 +497,6 @@ const HomeTab = ({ profile }) => {
         transactionsPollIntervalRef.current = null;
       }
       
-      // Event Listeners entfernen
       window.removeEventListener('pageshow', handlePageShowTx);
       document.removeEventListener('resume', handleResumeTx);
       document.removeEventListener('visibilitychange', handleVisibilityChangeTx);
