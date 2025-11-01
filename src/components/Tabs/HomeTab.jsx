@@ -8,22 +8,38 @@ const HomeTab = ({ profile }) => {
   const [balance, setBalance] = useState(profile?.balance || 0);
   const [transactions, setTransactions] = useState([]);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
-  const [isVisible, setIsVisible] = useState(true);
 
   const userId = profile?.id;
   const channelsRef = useRef([]);
   const isInitializedRef = useRef(false);
+  const wasInBackgroundRef = useRef(false);
 
-  // 🔄 VISIBILITY CHANGE DETECTION
+  // 🔄 VISIBILITY CHANGE MIT DELAY
   useEffect(() => {
     const handleVisibilityChange = () => {
-      const visible = document.visibilityState === 'visible';
-      setIsVisible(visible);
-      
-      if (visible) {
-        console.log('👀 App wurde sichtbar - reconnecte...');
-        refreshAllData();
-        reconnectChannels();
+      if (document.visibilityState === 'visible') {
+        console.log('👀 App wieder sichtbar');
+        
+        // Warte kurz ab ob Supabase automatisch reconnected
+        setTimeout(() => {
+          // Prüfe ob Channels noch verbunden sind
+          const needsReconnect = channelsRef.current.some(channel => {
+            return channel._subscriptionState !== 'SUBSCRIBED';
+          });
+          
+          if (needsReconnect && wasInBackgroundRef.current) {
+            console.log('🔄 Manueller Reconnect nach Background');
+            reconnectChannels();
+          }
+          
+          // Daten immer aktualisieren
+          refreshAllData();
+          wasInBackgroundRef.current = false;
+        }, 1000);
+        
+      } else {
+        console.log('📱 App im Hintergrund');
+        wasInBackgroundRef.current = true;
       }
     };
 
@@ -59,14 +75,14 @@ const HomeTab = ({ profile }) => {
     }
   }, [userId]);
 
-  // 🎯 REALTIME CHANNELS SETUP (nur einmal beim Start)
+  // 🎯 REALTIME CHANNELS SETUP
   const setupRealtimeChannels = useCallback(() => {
     if (!userId || isInitializedRef.current) return;
     
     isInitializedRef.current = true;
     console.log('🎯 Starte Realtime-Subscriptions');
 
-    // Alte Channels entfernen falls vorhanden
+    // Alte Channels entfernen
     channelsRef.current.forEach(channel => {
       supabase.removeChannel(channel);
     });
@@ -119,23 +135,27 @@ const HomeTab = ({ profile }) => {
     channelsRef.current = [balanceChannel, transactionsChannel];
   }, [userId, refreshAllData]);
 
-  // 🔥 RECONNECT CHANNELS (nur bei Visibility Change)
+  // 🔥 RECONNECT NUR BEI BEDARF
   const reconnectChannels = useCallback(() => {
     if (!userId) return;
     
-    console.log('🔄 Reconnecting channels...');
+    console.log('🔄 Manueller Reconnect...');
     isInitializedRef.current = false;
-    setupRealtimeChannels();
+    
+    // Kurze Verzögerung vor Reconnect
+    setTimeout(() => {
+      setupRealtimeChannels();
+    }, 500);
   }, [userId, setupRealtimeChannels]);
 
-  // 🚀 INIT EFFECT (nur einmal beim Mount)
+  // 🚀 INIT EFFECT
   useEffect(() => {
     if (!userId) return;
 
     // Initiale Daten laden
     refreshAllData();
     
-    // Channels setup (nur einmal)
+    // Channels setup
     setupRealtimeChannels();
 
     // 🧹 CLEANUP
@@ -146,6 +166,7 @@ const HomeTab = ({ profile }) => {
       });
       channelsRef.current = [];
       isInitializedRef.current = false;
+      wasInBackgroundRef.current = false;
     };
   }, [userId, refreshAllData, setupRealtimeChannels]);
 
