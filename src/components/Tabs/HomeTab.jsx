@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import User from '../dashboard/home/User';
 import Balance from '../dashboard/home/Balance';
@@ -12,6 +12,7 @@ const HomeTab = ({ profile }) => {
 
   const userId = profile?.id;
   const channelsRef = useRef([]);
+  const isInitializedRef = useRef(false);
 
   // 🔄 VISIBILITY CHANGE DETECTION
   useEffect(() => {
@@ -21,12 +22,8 @@ const HomeTab = ({ profile }) => {
       
       if (visible) {
         console.log('👀 App wurde sichtbar - reconnecte...');
-        // Sofortige Datenaktualisierung beim Zurückkehren
         refreshAllData();
-        // Reconnect Channels
         reconnectChannels();
-      } else {
-        console.log('📱 App im Hintergrund - cleanup...');
       }
     };
 
@@ -36,47 +33,48 @@ const HomeTab = ({ profile }) => {
     };
   }, []);
 
-  // 🔥 SOFORTIGER RECONNECT BEIM ZURÜCKKEHREN
-  const reconnectChannels = () => {
-    // Alte Channels entfernen
+  // 🔄 ALLE DATEN NEU LADEN
+  const refreshAllData = useCallback(async () => {
+    if (!userId) return;
+
+    try {
+      // Balance
+      const { data: balanceData } = await supabase
+        .from('profiles')
+        .select('balance')
+        .eq('id', userId)
+        .single();
+      if (balanceData) setBalance(balanceData.balance);
+
+      // Transactions
+      const { data: transactionsData } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('timestamp', { ascending: false })
+        .limit(5);
+      if (transactionsData) setTransactions(transactionsData);
+    } catch (error) {
+      console.error('Fehler beim Daten laden:', error);
+    }
+  }, [userId]);
+
+  // 🎯 REALTIME CHANNELS SETUP (nur einmal beim Start)
+  const setupRealtimeChannels = useCallback(() => {
+    if (!userId || isInitializedRef.current) return;
+    
+    isInitializedRef.current = true;
+    console.log('🎯 Starte Realtime-Subscriptions');
+
+    // Alte Channels entfernen falls vorhanden
     channelsRef.current.forEach(channel => {
       supabase.removeChannel(channel);
     });
     channelsRef.current = [];
 
-    // Neue Channels erstellen
-    setupRealtimeChannels();
-  };
-
-  // 🔄 ALLE DATEN NEU LADEN
-  const refreshAllData = async () => {
-    if (!userId) return;
-
-    // Balance
-    const { data: balanceData } = await supabase
-      .from('profiles')
-      .select('balance')
-      .eq('id', userId)
-      .single();
-    if (balanceData) setBalance(balanceData.balance);
-
-    // Transactions
-    const { data: transactionsData } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      .limit(5);
-    if (transactionsData) setTransactions(transactionsData);
-  };
-
-  // 🎯 REALTIME CHANNELS SETUP
-  const setupRealtimeChannels = () => {
-    if (!userId) return;
-
     // Balance Channel
     const balanceChannel = supabase
-      .channel(`balance-${userId}-${Date.now()}`) // Unique name
+      .channel(`balance-${userId}`)
       .on(
         'postgres_changes',
         {
@@ -94,17 +92,11 @@ const HomeTab = ({ profile }) => {
       .subscribe((status) => {
         console.log('📡 Balance Channel Status:', status);
         setIsRealtimeConnected(status === 'SUBSCRIBED');
-        
-        // Bei Verbindungsproblemen reconnecten
-        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          console.log('🔄 Balance Channel closed, reconnecting...');
-          setTimeout(() => reconnectChannels(), 1000);
-        }
       });
 
     // Transactions Channel  
     const transactionsChannel = supabase
-      .channel(`transactions-${userId}-${Date.now()}`)
+      .channel(`transactions-${userId}`)
       .on(
         'postgres_changes',
         {
@@ -113,68 +105,61 @@ const HomeTab = ({ profile }) => {
           table: 'transactions',
           filter: `user_id=eq.${userId}`
         },
-        async (payload) => {
-          console.log('✅ Transaction Update:', payload);
+        () => {
+          console.log('✅ Transaction Update - refresh data');
           setIsRealtimeConnected(true);
-          await refreshAllData(); // Einfach alles neu laden
+          refreshAllData();
         }
       )
       .subscribe((status) => {
         console.log('📡 Transactions Channel Status:', status);
         setIsRealtimeConnected(status === 'SUBSCRIBED');
-        
-        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          console.log('🔄 Transactions Channel closed, reconnecting...');
-          setTimeout(() => reconnectChannels(), 1000);
-        }
       });
 
     channelsRef.current = [balanceChannel, transactionsChannel];
-  };
+  }, [userId, refreshAllData]);
 
-  // 🚀 INIT EFFECT
+  // 🔥 RECONNECT CHANNELS (nur bei Visibility Change)
+  const reconnectChannels = useCallback(() => {
+    if (!userId) return;
+    
+    console.log('🔄 Reconnecting channels...');
+    isInitializedRef.current = false;
+    setupRealtimeChannels();
+  }, [userId, setupRealtimeChannels]);
+
+  // 🚀 INIT EFFECT (nur einmal beim Mount)
   useEffect(() => {
     if (!userId) return;
-
-    console.log('🎯 Starte optimierte Realtime-Subscriptions');
 
     // Initiale Daten laden
     refreshAllData();
     
-    // Channels setup
+    // Channels setup (nur einmal)
     setupRealtimeChannels();
-
-    // 🔄 HEARTBEAT FÜR STABILE VERBINDUNG
-    const heartbeatInterval = setInterval(() => {
-      if (isVisible && isRealtimeConnected) {
-        // Sende kleinen Ping um Verbindung aktiv zu halten
-        console.log('💓 Heartbeat - connection active');
-      }
-    }, 30000); // Alle 30 Sekunden
 
     // 🧹 CLEANUP
     return () => {
       console.log('🧹 Komponenten-Cleanup');
-      clearInterval(heartbeatInterval);
-      
       channelsRef.current.forEach(channel => {
         supabase.removeChannel(channel);
       });
       channelsRef.current = [];
+      isInitializedRef.current = false;
     };
-  }, [userId]);
+  }, [userId, refreshAllData, setupRealtimeChannels]);
 
   // 🔄 REFRESH FUNCTIONS
-  const refreshBalance = async () => {
+  const refreshBalance = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('balance')
       .eq('id', userId)
       .single();
     if (data) setBalance(data.balance);
-  };
+  }, [userId]);
 
-  const refreshTransactions = async () => {
+  const refreshTransactions = useCallback(async () => {
     const { data } = await supabase
       .from('transactions')
       .select('*')
@@ -182,7 +167,7 @@ const HomeTab = ({ profile }) => {
       .order('timestamp', { ascending: false })
       .limit(5);
     if (data) setTransactions(data);
-  };
+  }, [userId]);
 
   return (
     <div className="space-y-6">
