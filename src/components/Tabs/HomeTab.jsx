@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import User from '../dashboard/home/User';
 import Balance from '../dashboard/home/Balance';
@@ -7,52 +7,38 @@ import LastTransactions from '../dashboard/home/LastTransactions';
 const HomeTab = ({ profile }) => {
   const [balance, setBalance] = useState(profile?.balance || 0);
   const [transactions, setTransactions] = useState([]);
-  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+  
+  // 📡 Eigener Status pro Channel für präziseres Feedback
+  const [balanceChannelStatus, setBalanceChannelStatus] = useState(null);
+  const [txChannelStatus, setTxChannelStatus] = useState(null);
+
+  // Abgeleiteter Status: Nur "echt" verbunden, wenn beide Channels laufen
+  const isRealtimeConnected = 
+    balanceChannelStatus === 'SUBSCRIBED' && 
+    txChannelStatus === 'SUBSCRIBED';
 
   const userId = profile?.id;
-  const channelsRef = useRef([]);
-  const isInitializedRef = useRef(false);
-  const wasInBackgroundRef = useRef(false);
 
-  // 🔄 VISIBILITY CHANGE MIT DELAY
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        console.log('👀 App wieder sichtbar');
-        
-        // Warte kurz ab ob Supabase automatisch reconnected
-        setTimeout(() => {
-          // Prüfe ob Channels noch verbunden sind
-          const needsReconnect = channelsRef.current.some(channel => {
-            return channel._subscriptionState !== 'SUBSCRIBED';
-          });
-          
-          if (needsReconnect && wasInBackgroundRef.current) {
-            console.log('🔄 Manueller Reconnect nach Background');
-            reconnectChannels();
-          }
-          
-          // Daten immer aktualisieren
-          refreshAllData();
-          wasInBackgroundRef.current = false;
-        }, 1000);
-        
-      } else {
-        console.log('📱 App im Hintergrund');
-        wasInBackgroundRef.current = true;
-      }
-    };
+  // 🔄 Nur Transaktionen neu laden
+  const refreshTransactions = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const { data } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('timestamp', { ascending: false })
+        .limit(5);
+      if (data) setTransactions(data);
+    } catch (error) {
+      console.error('Fehler beim Laden der Transaktionen:', error);
+    }
+  }, [userId]);
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
-
-  // 🔄 ALLE DATEN NEU LADEN
+  // 🔄 Alle initialen Daten laden
   const refreshAllData = useCallback(async () => {
     if (!userId) return;
-
+    console.log('🔄 Lade alle initialen Daten...');
     try {
       // Balance
       const { data: balanceData } = await supabase
@@ -63,32 +49,20 @@ const HomeTab = ({ profile }) => {
       if (balanceData) setBalance(balanceData.balance);
 
       // Transactions
-      const { data: transactionsData } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('user_id', userId)
-        .order('timestamp', { ascending: false })
-        .limit(5);
-      if (transactionsData) setTransactions(transactionsData);
+      await refreshTransactions(); // Bestehende Funktion wiederverwenden
     } catch (error) {
-      console.error('Fehler beim Daten laden:', error);
+      console.error('Fehler beim initialen Daten laden:', error);
     }
-  }, [userId]);
+  }, [userId, refreshTransactions]);
 
-  // 🎯 REALTIME CHANNELS SETUP
-  const setupRealtimeChannels = useCallback(() => {
-    if (!userId || isInitializedRef.current) return;
-    
-    isInitializedRef.current = true;
-    console.log('🎯 Starte Realtime-Subscriptions');
+  // 🚀 INIT & REALTIME EFFECT
+  useEffect(() => {
+    if (!userId) return;
 
-    // Alte Channels entfernen
-    channelsRef.current.forEach(channel => {
-      supabase.removeChannel(channel);
-    });
-    channelsRef.current = [];
+    // 1. Initiale Daten laden
+    refreshAllData();
 
-    // Balance Channel
+    // 2. Balance Channel Setup
     const balanceChannel = supabase
       .channel(`balance-${userId}`)
       .on(
@@ -100,78 +74,81 @@ const HomeTab = ({ profile }) => {
           filter: `id=eq.${userId}`
         },
         (payload) => {
-          console.log('✅ Balance Update:', payload);
+          console.log('✅ Balance Update (Realtime):', payload.new.balance);
           setBalance(payload.new.balance);
-          setIsRealtimeConnected(true);
         }
       )
-      .subscribe((status) => {
-        console.log('📡 Balance Channel Status:', status);
-        setIsRealtimeConnected(status === 'SUBSCRIBED');
+      .subscribe((status, err) => {
+        console.log(`📡 Balance Channel Status: ${status}`, err || '');
+        setBalanceChannelStatus(status);
+        // Bei erfolgreicher Wiederverbindung (z.B. nach Hintergrund)
+        // zur Sicherheit Balance neu laden
+        if (status === 'SUBSCRIBED') {
+          // Optional: refreshBalance() aufrufen, um verpasste Änderungen abzuholen
+          // (obwohl Supabase das eigtl. cachen sollte)
+        }
       });
+    
+    // 
 
-    // Transactions Channel  
+    // 3. Transactions Channel Setup
     const transactionsChannel = supabase
       .channel(`transactions-${userId}`)
       .on(
         'postgres_changes',
         {
-          event: '*',
-          schema: 'public', 
+          event: 'INSERT', // Nur auf INSERT hören
+          schema: 'public',
+          table: 'transactions',
+          filter: `user_id=eq.${userId}`
+        },
+        (payload) => {
+          console.log('✅ Neue Transaktion (Realtime):', payload.new);
+          // Neue Transaktion effizient vorne anfügen
+          setTransactions((currentTransactions) => 
+            [payload.new, ...currentTransactions].slice(0, 5) // auf 5 limitieren
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE', // Optional: Auf UPDATE/DELETE hören
+          schema: 'public',
           table: 'transactions',
           filter: `user_id=eq.${userId}`
         },
         () => {
-          console.log('✅ Transaction Update - refresh data');
-          setIsRealtimeConnected(true);
-          refreshAllData();
+          console.log('✅ Transaktion Update/Delete (Realtime) - Lade neu...');
+          // Bei komplexeren Änderungen die Liste neu laden
+          refreshTransactions();
         }
       )
-      .subscribe((status) => {
-        console.log('📡 Transactions Channel Status:', status);
-        setIsRealtimeConnected(status === 'SUBSCRIBED');
+      .subscribe((status, err) => {
+        console.log(`📡 Transactions Channel Status: ${status}`, err || '');
+        setTxChannelStatus(status);
+        // Bei erfolgreicher Wiederverbindung Transaktionen neu laden
+        // um sicherzustellen, dass nichts verpasst wurde
+        if (status === 'SUBSCRIBED') {
+          refreshTransactions();
+        }
       });
 
-    channelsRef.current = [balanceChannel, transactionsChannel];
-  }, [userId, refreshAllData]);
-
-  // 🔥 RECONNECT NUR BEI BEDARF
-  const reconnectChannels = useCallback(() => {
-    if (!userId) return;
-    
-    console.log('🔄 Manueller Reconnect...');
-    isInitializedRef.current = false;
-    
-    // Kurze Verzögerung vor Reconnect
-    setTimeout(() => {
-      setupRealtimeChannels();
-    }, 500);
-  }, [userId, setupRealtimeChannels]);
-
-  // 🚀 INIT EFFECT
-  useEffect(() => {
-    if (!userId) return;
-
-    // Initiale Daten laden
-    refreshAllData();
-    
-    // Channels setup
-    setupRealtimeChannels();
-
-    // 🧹 CLEANUP
+    // 4. 🧹 CLEANUP
     return () => {
-      console.log('🧹 Komponenten-Cleanup');
-      channelsRef.current.forEach(channel => {
-        supabase.removeChannel(channel);
-      });
-      channelsRef.current = [];
-      isInitializedRef.current = false;
-      wasInBackgroundRef.current = false;
+      console.log('🧹 Realtime-Cleanup');
+      supabase.removeChannel(balanceChannel);
+      supabase.removeChannel(transactionsChannel);
     };
-  }, [userId, refreshAllData, setupRealtimeChannels]);
 
-  // 🔄 REFRESH FUNCTIONS
-  const refreshBalance = useCallback(async () => {
+    // Dieser Effect soll nur laufen, wenn die userId sich ändert.
+    // Die Callbacks (refreshAllData, refreshTransactions) sind stabil dank useCallback.
+  }, [userId, refreshAllData, refreshTransactions]);
+
+
+  // 🔄 REFRESH FUNCTION (für Button)
+  const refreshBalanceManually = useCallback(async () => {
+    if (!userId) return;
     const { data } = await supabase
       .from('profiles')
       .select('balance')
@@ -180,15 +157,6 @@ const HomeTab = ({ profile }) => {
     if (data) setBalance(data.balance);
   }, [userId]);
 
-  const refreshTransactions = useCallback(async () => {
-    const { data } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      .limit(5);
-    if (data) setTransactions(data);
-  }, [userId]);
 
   return (
     <div className="space-y-6">
@@ -204,7 +172,7 @@ const HomeTab = ({ profile }) => {
         balance={balance}
         loading={false}
         isRealtimeConnected={isRealtimeConnected}
-        onRefresh={refreshBalance}
+        onRefresh={refreshBalanceManually} // Manuelle Refresh-Funktion übergeben
       />
       
       <LastTransactions 
